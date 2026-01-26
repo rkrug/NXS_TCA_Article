@@ -1,0 +1,113 @@
+# R specific
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+
+# RStudio
+.Rproj.user/
+*.Rproj
+.rstudio/
+.Rprofile.user
+rsconnect/
+.httr-oauth
+.httr-oauth2
+
+# R package files
+*.tar.gz
+*.Rcheck/
+
+# renv
+renv/library/
+renv/staging/
+renv/sandbox/
+renv/cellar/
+renv/local/
+renv/cache/
+renv/python/
+
+# Quarto
+/.quarto/
+_site/
+_book/
+_freeze/
+*_files/
+*.html
+!README.html
+*.pdf
+*.docx
+*.pptx
+*.tex
+*.log
+*.aux
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+
+# Mermaid
+*.mmd.png
+*.mmd.svg
+*.mmd.pdf
+
+# Knitr/RMarkdown cache
+*_cache/
+/cache/
+figure/
+*.knit.md
+*.utf8.md
+
+# targets
+_targets/
+_targets.yaml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.Renviron
+
+
+# 
+output/keyworks/json/
+output/keyworks/jsonl/
+
+TCAC 2.0.code-workspace

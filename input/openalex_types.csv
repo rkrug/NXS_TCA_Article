@@ -1,0 +1,21 @@
+Type,Description,Included
+article,Scholarly journal articles and related periodical works,TRUE
+book,Monographs and other long-form published books,TRUE
+book-chapter,Chapters published within edited books or proceedings,TRUE
+dissertation,Doctoral or master level theses and dissertations,TRUE
+editorial,Editorials and editor introductions,FALSE
+preprint,Pre-publication manuscripts shared prior to peer review,TRUE
+report,"Technical, institutional, or policy reports",TRUE
+review,Narrative or systematic review articles,FALSE
+dataset,Published datasets and structured data releases,FALSE
+erratum,Published corrections to previously released works,FALSE
+grant,Summaries or descriptions of grant-funded projects,FALSE
+letter,"Correspondence, commentaries, and short letters",FALSE
+libguides,Library research guides and curated bibliographies,FALSE
+other,Works that do not align with a more specific OpenAlex type,FALSE
+paratext,"Prefaces, introductions, indexes, and other paratextual items",FALSE
+peer-review,Formal peer review reports and evaluations,FALSE
+reference-entry,Encyclopaedia or dictionary reference entries,FALSE
+retraction,Notices retracting previously published works,FALSE
+standard,"Standards, protocols, and technical specifications",FALSE
+supplementary-materials,Supplementary files accompanying primary publications,FALSE

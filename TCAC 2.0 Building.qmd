@@ -1,0 +1,93 @@
+---
+title: 'Transformative Change Assessment Corpus 2.0'
+subtitle: 'Extending TCAC 1.0 for added functionality'
+author:
+  - name: 
+        family: Krug
+        given: Rainer M.    
+    id: rmk
+    orcid: 0000-0002-7490-0066
+    email: Rainer.Krug@sib.swiss, Rainer@Krugs.de
+    roles: [author, editor] 
+  - name: 
+        family: Villasante
+        given: Sebastian    
+    id: sv
+    orcid: 0000-0001-6296-4479
+    roles: [author] 
+
+abstract: > 
+ 
+license: "CC BY"
+
+doi: &doi XXXXXXX
+citation: 
+  type: report
+  container-title: 'TCA Corpus 2.0'
+  doi: *doi
+version: 2.0.0 
+
+format:
+    html:
+        toc: true
+        toc-depth: 5
+        toc_expand: true
+        embed-resources: true
+        code-fold: true
+        code-summary: 'Show the code'
+        grid:
+            sidebar-width: 0px
+            body-width: 4000px
+            margin-width: 200px
+            gutter-width: 1.5rem      
+execute:
+  message: NA
+
+params:
+   
+    ## Search Terms from TCAC 1.0
+    tfc: !expr file.path("input", "search terms", "tfc_TCAC_1.0.txt")
+    nature: !expr file.path("input", "search terms", "nature_TCAC_1.0.txt")
+    # tcac: !expr paste("(", paste0(readLines(file.path("input", "search terms", "nature_TCAC_1.0.txt")), collapse = "\n"), ") \nAND \n(", paste0(readLines(file.path("input", "search terms", "tfc_TCAC_1.0.txt")), collapse = "\n"), ")")
+    
+    ## Key Papers from TCAC 1.0
+    key_papers: !expr file.path("input", "key papers", "key_papers_TCAC_1.0.rds")
+
+    ## Types filter
+    types_filter: !expr file.path("input", "openalex_types.csv")
+
+    pages_dir: !expr file.path(".", "data", "pages")
+    corpus_dir: !expr file.path(".", "data", "corpus")
+
+    sample_size: 10000
+    
+    workers: 8
+---
+
+
+```{r}
+#| label: setup
+
+library(targets)
+library(dplyr)
+library(arrow)
+```
+
+# Introduction
+
+# Methods
+
+## Preparation
+
+### Key Paper
+
+
+```{r}
+#| label: show-prepare-keypaper
+#| eval: false
+#| file: "R/prepare_keypaper.R"
+#| code-fold: true
+#| code-summary: "Show prepare_keypaper.R"
+```
+
+## Methods
