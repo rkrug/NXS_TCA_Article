@@ -32,7 +32,7 @@ list(
   ),
   tar_target(
     key_works,
-    prepare_keypapers(key_papers_file),
+    prepare_keypapers(key_papers_file, workers = params$workers),
     format = "file"
   ),
 
@@ -101,6 +101,7 @@ list(
   tar_target(
     count_st,
     get_count(tfc_st, nature_st, types_filter, workers = params$workers),
+    format = "file"
   ),
 
   #### Render final report

@@ -4,12 +4,7 @@ get_count <- function(
   types_filter,
   workers
 ) {
-  # result <- c(
-  #   count = NA_integer_,
-  #   db_response_time_ms = NA_integer_,
-  #   page = NA_integer_,
-  #   per_page = NA_integer_
-  # )
+  fn_out <- file.path("output", "serch_strings", "count.rds")
 
   query <- list(
     tfc_complete = openalexPro::pro_query(
@@ -38,11 +33,13 @@ get_count <- function(
     )
   )
 
-  result <- openalexPro::pro_request(
+  dir.create(dirname(fn_out), recursive = TRUE, showWarnings = FALSE)
+  openalexPro::pro_request(
     query,
     count_only = TRUE,
     workers = workers
-  )
+  ) |>
+    saveRDS(fn_out)
 
-  return(result)
+  return(fn_out)
 }

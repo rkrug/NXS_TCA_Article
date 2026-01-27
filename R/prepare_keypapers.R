@@ -1,5 +1,6 @@
 prepare_keypapers <- function(
-  kp_tcac10
+  kp_tcac10,
+  workers
 ) {
   kp_path <- file.path("output", "keyworks")
 
@@ -34,7 +35,8 @@ prepare_keypapers <- function(
   ) |>
     openalexPro::pro_fetch(
       project_folder = kp_path,
-      overwrite = TRUE
+      overwrite = TRUE,
+      workers = workers
     )
 
   return(kp_path)
