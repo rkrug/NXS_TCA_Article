@@ -1824,7 +1824,7 @@
     "openalexPro": {
       "Package": "openalexPro",
       "Version": "0.4.2",
-      "Source": "Local",
+      "Source": "GitHub",
       "Type": "Package",
       "Title": "Providing a more advanced access to OpenAlex for the power user",
       "Author": "Rainer M Krug",
@@ -1865,9 +1865,12 @@
       "RoxygenNote": "7.3.3",
       "VignetteBuilder": "quarto",
       "Config/testthat/edition": "3",
-      "RemotePkgRef": "local::/Users/rkrug/Documents/GitHub/openalexPro",
-      "RemoteType": "local",
-      "NeedsCompilation": "no"
+      "RemoteType": "github",
+      "RemoteHost": "api.github.com",
+      "RemoteUsername": "rkrug",
+      "RemoteRepo": "openalexPro",
+      "RemoteRef": "v0.4.2",
+      "RemoteSha": "91296f008f7e39544fb3be0540672b2839fd581d"
     },
     "openssl": {
       "Package": "openssl",

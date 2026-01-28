@@ -111,3 +111,4 @@ output/keyworks/json/
 output/keyworks/jsonl/
 
 TCAC 2.0.code-workspace
+input/tcac_1.0_ids.parquet

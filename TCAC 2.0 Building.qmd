@@ -35,6 +35,7 @@ format:
         embed-resources: true
         code-fold: true
         code-summary: 'Show the code'
+        link-external-newwindow: true
         grid:
             sidebar-width: 0px
             body-width: 4000px
@@ -75,19 +76,96 @@ library(arrow)
 
 # Introduction
 
+## Data Base
+The data base is the OpenAlex snapshot from the `RELEASE 2026-01-15`. All metadata is extracted from this snapshot, based on the openalex ids as identified for the TCAC 1.0 and newly identified for the TCAC 2.0. This guarantees consistency in the metadata and avoids any bias based on updated metadata.
+
+
 # Methods
 
-## Preparation
+## Key Paper
 
-### Key Paper
-
+The DOIs of the key paper used for assessing the inclusiveness of TCAC 1.0 are used here and the works are downloaded
 
 ```{r}
-#| label: show-prepare-keypaper
+#| label: show-prepare-keypapers
 #| eval: false
-#| file: "R/prepare_keypaper.R"
+#| file: "R/prepare_keypapers.R"
 #| code-fold: true
 #| code-summary: "Show prepare_keypaper.R"
 ```
 
-## Methods
+## Compilation TCAC 1.0
+
+As TCAC 1.0 is build with a limited set of columns to limit memory usage and reduce computing time, we decided to re-construct the TCAC 1.0 based on the data snapshot from the OpenAlex data from the `RELEASE 2026-01-15`. 
+
+TODO
+
+```{r}
+#| label: show-extract_ids_from_snapshot
+#| eval: false
+#| file: "R/extract_ids_from_snapshot.R"
+#| code-fold: true
+#| code-summary: "Show extract_ids_from_snapshot.R"
+```
+
+## Count of works TCAC 1.0
+
+For TCAC 1.0, the number of works is determined
+
+On the one hand as in TCAC 1.0, and after that using the type filter
+
+- Types Filter [openalex_types.csv](input/openalex_types.csv){target="_blank"}
+
+TODO
+
+```{r}
+#| label: show-get_count_tcac_10
+#| eval: false
+#| file: "R/get_count_tcac_10.R"
+#| code-fold: true
+#| code-summary: "Show get_count.R"
+```
+
+## Count of works currently
+
+The number of works on OpenAlex is determined using the following search terms
+
+- Transformative change search term [tfc.txt](input/search terms/tfc_TCAC_1.0.txt){target="_blank"}
+- Nature search term [nature.txt](input/search terms/nature_TCAC_1.0.txt){target="_blank"}
+
+combined with `AND`as well as
+
+- Types Filter [openalex_types.csv](input/openalex_types.csv){target="_blank"}
+
+```{r}
+#| label: show-get_count
+#| eval: false
+#| file: "R/get_count.R"
+#| code-fold: true
+#| code-summary: "Show get_count.R"
+```
+
+## Download of TCAC 2.0
+
+To make the download as efficient as possible as well as to keep consistency in the metadata with the above described TCAC 1.0, the ids of TCAC 2.0 are downloiaded from OpenAlex and the full records are retrieved from the same snapshot as TCAC 1.0 has been re-constructed.
+
+TODO
+
+```{r}
+#| label: show-extract_ids_from_snapshot
+#| eval: false
+#| file: "R/extract_ids_from_snapshot.R"
+#| code-fold: true
+#| code-summary: "Show extract_ids_from_snapshot.R"
+```
+
+TODO
+
+```{r}
+#| label: show-extract_tcac20
+#| eval: false
+#| file: "R/extract_tcac20.R"
+#| code-summary: "Show extract_tcac20.R"
+```
+
+# Results
