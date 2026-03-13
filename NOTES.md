@@ -1,0 +1,1 @@
+- use command CLI to download the grobid xml of the fulltext articles [see here](https://docs.openalex.org/download-all-data/openalex-cli) for details

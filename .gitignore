@@ -106,9 +106,15 @@ $RECYCLE.BIN/
 .Renviron
 
 
-# 
-output/keyworks/json/
-output/keyworks/jsonl/
-
 TCAC 2.0.code-workspace
+
+# output
+output/keyworks/json*
+
+output/TCAC_1.0/corpus/
+
+output/TCAC_2.0_ids/
+output/TCAC_2.0/corpus
+
+# input
 input/tcac_1.0_ids.parquet

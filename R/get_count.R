@@ -6,31 +6,42 @@ get_count <- function(
 ) {
   fn_out <- file.path("output", "serch_strings", "count.rds")
 
-  query <- list(
-    tfc_complete = openalexPro::pro_query(
-      title_and_abstract.search = tfc_st,
-      type = NULL
-    ),
-    tfc_filtered = openalexPro::pro_query(
-      title_and_abstract.search = tfc_st,
-      type = types_filter
-    ),
-    nature_complete = openalexPro::pro_query(
-      title_and_abstract.search = nature_st,
-      type = NULL
-    ),
-    nature_filtered = openalexPro::pro_query(
-      title_and_abstract.search = nature_st,
-      type = types_filter
-    ),
-    tca_complete = openalexPro::pro_query(
-      title_and_abstract.search = nature_st,
-      type = NULL
-    ),
-    tca_filtered = openalexPro::pro_query(
-      title_and_abstract.search = nature_st,
-      type = types_filter
-    )
+  withCallingHandlers(
+    {
+      query <- list(
+        tfc_complete = openalexPro::pro_query(
+          title_and_abstract.search = tfc_st,
+          type = NULL
+        ),
+        tfc_filtered = openalexPro::pro_query(
+          title_and_abstract.search = tfc_st,
+          type = types_filter
+        ),
+        nature_complete = openalexPro::pro_query(
+          title_and_abstract.search = nature_st,
+          type = NULL
+        ),
+        nature_filtered = openalexPro::pro_query(
+          title_and_abstract.search = nature_st,
+          type = types_filter
+        ),
+        tca_complete = openalexPro::pro_query(
+          title_and_abstract.search = nature_st,
+          type = NULL
+        ),
+        tca_filtered = openalexPro::pro_query(
+          title_and_abstract.search = nature_st,
+          type = types_filter
+        )
+      )
+    },
+    warning = function(w) {
+      if (
+        grepl('title_and_abstract\\.search.*deprecated', conditionMessage(w))
+      ) {
+        invokeRestart("muffleWarning")
+      }
+    }
   )
 
   dir.create(dirname(fn_out), recursive = TRUE, showWarnings = FALSE)
