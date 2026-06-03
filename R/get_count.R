@@ -4,7 +4,7 @@ get_count <- function(
   types_filter,
   workers
 ) {
-  fn_out <- file.path("output", "serch_strings", "count.rds")
+  fn_out <- file.path("output", "search_strings", "count.rds")
 
   withCallingHandlers(
     {

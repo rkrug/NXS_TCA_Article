@@ -1,0 +1,11 @@
+workers: 8
+sample_size: 10000
+
+embedding:
+  # Served via backend_specter2_tei() — local TEI with merged SPECTER2 proximity model.
+  # Start the server externally (see openalexVectorComp::inst/scripts/start_tei_specter2.sh).
+  host: localhost
+  port: 8080
+  model: allenai/specter2_proximity_merged   # provenance label; TEI loads what it was started with
+  batch_size: 100         # rows per shard (output parquet + progress tick)
+  max_batch_size: 32      # texts per HTTP request to TEI (lower if HTTP 413)

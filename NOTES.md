@@ -1,1 +1,3 @@
-- use command CLI to download the grobid xml of the fulltext articles [see here](https://docs.openalex.org/download-all-data/openalex-cli) for details
+# TODO Items
+- [ ] Add scoring of corpus based on key papers using [openalexVectorComp](https://github.com/rkrug/openalexVectorComp)
+- [ ] 

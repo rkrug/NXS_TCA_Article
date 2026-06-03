@@ -46,32 +46,7 @@ execute:
 
 params:
    
-    ## Search Terms from TCAC 1.0
-    tfc_dir: !expr file.path("input", "search terms", "tfc_TCAC_1.0.txt")
-    nature_dir: !expr file.path("input", "search terms", "nature_TCAC_1.0.txt")
-    # tcac: !expr paste("(", paste0(readLines(file.path("input", "search terms", "nature_TCAC_1.0.txt")), collapse = "\n"), ") \nAND \n(", paste0(readLines(file.path("input", "search terms", "tfc_TCAC_1.0.txt")), collapse = "\n"), ")")
-    
-    ## Snapshot dir
-    snapshot_dir: !expr file.path("input", "snapshot")
 
-    ## Key Papers from TCAC 1.0
-    key_papers_dir: !expr file.path("input", "key papers", "key_papers_TCAC_1.0.rds")
-
-    ## tcac10
-    ids_tcac10_dir: !expr file.path("input", "TCAC_1.0", "ids.parquet")
-    corpus_tcac10_dir: !expr file.path("output", "TCAC_1.0", "corpus")
-
-
-    ## tcac20
-    ids_tcac20_dir: !expr file.path("output", "TCAC_2.0_ids")
-    corpus_tcac20_dir: !expr file.path("output", "TCAC_2.0", "corpus")
-
-    ## Types filter
-    types_filter_dir: !expr file.path("input", "openalex_types.csv")
-
-    sample_size: 10000
-    
-    workers: 8
 ---
 
 

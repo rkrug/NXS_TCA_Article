@@ -1,8 +1,15 @@
 get_tcac20_ids <- function(
   st,
   tf,
-  project_folder
+  project_folder,
+  workers
 ) {
+  unlink(
+    file.path(project_folder, "ids"),
+    recursive = TRUE,
+    force = TRUE
+  )
+
   queries <- lapply(
     tf,
     function(type) {
@@ -22,7 +29,16 @@ get_tcac20_ids <- function(
       pages = NULL,
       project_folder = project_folder,
       api_key = keyring::key_get("API_openalex"),
-      workers = 6
+      workers = workers,
+      progress = TRUE,
+      delete_input = TRUE,
+      overwrite = TRUE
     )
-  return(result)
+
+  file.rename(
+    from = file.path(project_folder, "parquet"),
+    to = file.path(project_folder, "ids")
+  )
+
+  return(file.path(project_folder, "ids"))
 }
