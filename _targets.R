@@ -16,7 +16,15 @@ lapply(list.files("R", pattern = "\\.R$", full.names = TRUE), source)
 # Operational config — not tracked, changes do not invalidate targets
 cfg <- yaml::read_yaml("config.yaml")
 workers <- cfg$workers
-emb_cfg <- cfg$embedding
+emb_name <- cfg$active_embedding
+emb_cfg <- cfg$embeddings[[emb_name]]
+if (is.null(emb_cfg)) {
+  stop(
+    "active_embedding '",
+    emb_name,
+    "' not found under embeddings: in config.yaml"
+  )
+}
 # Sys.setenv(OVC_API_TOKEN = keyring::key_get("API_openai"))  # only when provider == openai
 
 tar_option_set(
@@ -120,63 +128,89 @@ list(
   #   format = "file"
   # ),
 
-  # Key-paper embeddings (reference set) --------------------------------------
-  # Co-located under output/TCAC_2.0/embeddings/ so distance_reference_cosine()
-  # can read corpus + reference from the same embeddings dataset.
+  # Shared pilot subset (first emb_cfg$pilot_n rows of corpus extract) -------
+
+  tar_target(
+    pilot_corpus_tcac20,
+    make_pilot_subset(
+      corpus_path = corpus_tcac20,
+      out_dir = file.path(
+        "output/TCAC_2.0",
+        paste0("pilot_n", emb_cfg$pilot_n)
+      ),
+      n = emb_cfg$pilot_n
+    ),
+    format = "file"
+  ),
+
+  # TCAC 2.0 corpus embeddings → source=corpus partition ---------------------
+  # All three variants (title / abstract / title_abstract) embedded in one
+  # call and written into the unified database partitioned by (source, variant).
+
+  tar_target(
+    emb_tcac20,
+    embed_works(
+      corpus_path = pilot_corpus_tcac20,
+      out_dir = "output/TCAC_2.0/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg
+    ),
+    format = "file"
+  ),
+
+  # Keypaper embeddings → source=keypaper partition in same config ----------
+
+  tar_target(
+    emb_keypapers,
+    embed_works(
+      corpus_path = key_works,
+      out_dir = "output/TCAC_2.0/embeddings",
+      source = "keypaper",
+      config_name = emb_name,
+      cfg = emb_cfg
+    ),
+    format = "file"
+  ),
+
+  # Scoring: one target per variant, reading the unified database ------------
 
   # tar_target(
-  #   emb_keyworks,
-  #   embed_works(
-  #     corpus_path = file.path(key_works),
-  #     cfg = emb_cfg,
-  #     project_folder = "output/TCAC_2.0",
-  #     label_override = "keyworks"
-  #   ),
-  #   format = "file"
-  # ),
-
-  # TCAC 2.0 embeddings — pilot via n=1000, full via n=NULL -------------------
-
-  # tar_target(
-  #   emb_tcac20,
-  #   embed_works(
-  #     corpus_path = corpus_tcac20,
-  #     cfg = emb_cfg,
-  #     n = 1000
-  #   ),
-  #   format = "file"
-  # ),
-
-  # TCAC 2.0 scoring against key-paper reference set --------------------------
-
-  # tar_target(
-  #   scores_tcac20,
+  #   scores_tcac20_title,
   #   score_keypapers(
-  #     corpus_emb_dir = emb_tcac20,
-  #     reference_emb_dir = emb_keyworks
+  #     corpus_emb_dir    = emb_tcac20,
+  #     reference_emb_dir = emb_keypapers,
+  #     variant           = "title",
+  #     out_dir           = "output/TCAC_2.0/scores"
+  #   ),
+  #   format = "file"
+  # ),
+  # tar_target(
+  #   scores_tcac20_abstract,
+  #   score_keypapers(
+  #     corpus_emb_dir    = emb_tcac20,
+  #     reference_emb_dir = emb_keypapers,
+  #     variant           = "abstract",
+  #     out_dir           = "output/TCAC_2.0/scores"
+  #   ),
+  #   format = "file"
+  # ),
+  # tar_target(
+  #   scores_tcac20_title_abstract,
+  #   score_keypapers(
+  #     corpus_emb_dir    = emb_tcac20,
+  #     reference_emb_dir = emb_keypapers,
+  #     variant           = "title_abstract",
+  #     out_dir           = "output/TCAC_2.0/scores"
   #   ),
   #   format = "file"
   # )
 
   # --- DISABLED: TCAC 1.0 embedding & scoring -------------------------------
-  # Re-enable when TCAC 1.0 processing is needed. Uses the same pattern.
-  #
-  # , tar_target(
-  #     emb_tcac10,
-  #     embed_works(
-  #       corpus_path = corpus_tcac10_db,
-  #       cfg         = emb_cfg,
-  #       n           = NULL
-  #     ),
-  #     format = "file"
-  #   )
-  # , tar_target(
-  #     scores_tcac10,
-  #     score_keypapers(
-  #       corpus_emb_dir    = emb_tcac10,
-  #       reference_emb_dir = emb_keyworks    # also needs co-location in TCAC_1.0
-  #     ),
-  #     format = "file"
-  #   )
+  # Re-enable when TCAC 1.0 processing is needed. Pattern is identical:
+  # add a `pilot_corpus_tcac10` (or skip pilot), then `emb_tcac10` writing
+  # into output/TCAC_1.0/embeddings with source = "corpus", then 3 score
+  # targets pointing at that database + the keypapers embedded there too.
+
   NULL
 )

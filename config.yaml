@@ -1,11 +1,39 @@
 workers: 8
 sample_size: 10000
 
-embedding:
-  # Served via backend_specter2_tei() — local TEI with merged SPECTER2 proximity model.
-  # Start the server externally (see openalexVectorComp::inst/scripts/start_tei_specter2.sh).
-  host: localhost
-  port: 8080
-  model: allenai/specter2_proximity_merged   # provenance label; TEI loads what it was started with
-  batch_size: 100         # rows per shard (output parquet + progress tick)
-  max_batch_size: 32      # texts per HTTP request to TEI (lower if HTTP 413)
+# Selects which entry under `embeddings:` is active for this pipeline run.
+# The active config is also used as the `config=` hive-partition value under
+# output/TCAC_2.0/embeddings/, so different models live side-by-side on disk.
+active_embedding: SPECTER2
+
+embeddings:
+
+  SPECTER2:
+    # TEI server (start via ./scripts/start_tei_specter2.sh)
+    host: localhost
+    port: 8080
+    model: allenai/specter2_proximity_merged   # provenance label (TEI --served-model-name)
+    # Embedding-side tuning
+    batch_size: 5000           # rows per shard (Arrow scan + parquet write)
+    max_batch_size: 64        # texts per HTTP request to TEI (needs matching --max-client-batch-size 128 on TEI)
+    # Text format
+    sep_token: "[SEP]"
+    title_cap_combined: 200    # char cap on title in `title [SEP] abstract` variant
+    # Pilot
+    pilot_n: 1000              # rows in the shared pilot subset; null = full corpus
+    # TEI server flags (read by scripts/start_tei_specter2.sh)
+    max_batch_tokens: 32768
+    max_concurrent: 512
+
+  # Template for adding more models — uncomment, fill in, set active_embedding above.
+  # NomicV1:
+  #   host: localhost
+  #   port: 8081
+  #   model: nomic-ai/nomic-embed-text-v1.5
+  #   batch_size: 5000
+  #   max_batch_size: 64
+  #   sep_token: ""             # Nomic uses raw concat, no special separator
+  #   title_cap_combined: null  # 8192-ctx model — no need to cap title
+  #   pilot_n: 1000
+  #   max_batch_tokens: 65536
+  #   max_concurrent: 512

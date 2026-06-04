@@ -105,6 +105,9 @@ $RECYCLE.BIN/
 .env.*.local
 .Renviron
 
+# Python venv used by scripts/prepare_specter2.sh
+.venv/
+
 
 TCAC 2.0.code-workspace
 
