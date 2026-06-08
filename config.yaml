@@ -4,7 +4,7 @@ sample_size: 10000
 # Selects which entry under `embeddings:` is active for this pipeline run.
 # The active config is also used as the `config=` hive-partition value under
 # output/TCAC_2.0/embeddings/, so different models live side-by-side on disk.
-active_embedding: SPECTER2
+active_embedding: SPECTER2_runpod
 
 embeddings:
 
@@ -12,18 +12,39 @@ embeddings:
     # TEI server (start via ./scripts/start_tei_specter2.sh)
     host: localhost
     port: 8080
+    scheme: http               # http for local, https for RunPod
+    # auth_token_keyring: API_TEI   # OPTIONAL keyring entry → OVC_API_TOKEN (RunPod)
     model: allenai/specter2_proximity_merged   # provenance label (TEI --served-model-name)
     # Embedding-side tuning
     batch_size: 5000           # rows per shard (Arrow scan + parquet write)
     max_batch_size: 64        # texts per HTTP request to TEI (needs matching --max-client-batch-size 128 on TEI)
+    concurrency: 1             # parallel in-flight HTTP requests; 1 = serial (local Metal default)
     # Text format
     sep_token: "[SEP]"
     title_cap_combined: 200    # char cap on title in `title [SEP] abstract` variant
     # Pilot
-    pilot_n: 1000              # rows in the shared pilot subset; null = full corpus
+    pilot_n: 1000              # rows in the shared pilot subset (1000); null = full corpus
     # TEI server flags (read by scripts/start_tei_specter2.sh)
     max_batch_tokens: 32768
     max_concurrent: 512
+
+  # RunPod-hosted TEI on a rented L40s/A100/H100. Flip active_embedding above and
+  # populate host/auth before use. See scripts/start_tei_runpod.sh.
+  SPECTER2_runpod:
+    host: r6r5xht9qpyhm1-8080.proxy.runpod.net
+    port: 443
+    scheme: https
+    # auth_token_keyring: API_TEI   # keyring::key_set("API_TEI") first
+    model: allenai/specter2_proximity_merged
+    batch_size: 7168
+    max_batch_size: 256        # bigger client batch amortises ~30ms RTT
+    concurrency: 14             # parallel in-flight HTTP requests — saturates the L40S via dynamic batching
+    sep_token: "[SEP]"
+    title_cap_combined: 200
+    pilot_n: null
+    # TEI-server-side flags (read by scripts/start_tei_runpod.sh on the pod):
+    max_batch_tokens: 131072
+    max_concurrent: 2048
 
   # Template for adding more models — uncomment, fill in, set active_embedding above.
   # NomicV1:
@@ -37,3 +58,27 @@ embeddings:
   #   pilot_n: 1000
   #   max_batch_tokens: 65536
   #   max_concurrent: 512
+
+# BERTopic clustering on the SPECTER2 embeddings.
+# Consumed by scripts/run_bertopic.py via R/run_bertopic.R.
+clustering:
+  # UMAP for cluster space (separate from the 2D visualisation UMAP)
+  umap_n_components: 5
+  umap_n_neighbors:  15
+  umap_min_dist:     0.0
+  umap_metric:       cosine
+
+  # HDBSCAN
+  hdbscan_min_cluster_size: 10
+  hdbscan_min_samples:      5
+
+  # Topic representation
+  top_n_words:        10        # for c-TF-IDF labels
+  keypaper_threshold: 2         # topic is "relevant" if it contains ≥ N keypapers
+
+  # Variant + fallback strategy
+  primary_variant:  title_abstract
+  fallback_variant: title       # null disables transfer; works without primary stay topic = -1
+
+  # Reproducibility
+  random_seed: 13

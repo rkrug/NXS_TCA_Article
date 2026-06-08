@@ -33,7 +33,9 @@ tar_option_set(
     "arrow",
     "openalexPro",
     "openalexSnapshot",
-    "openalexVectorComp"
+    "openalexVectorComp",
+    "future",
+    "furrr"
   ),
   format = "rds"
 )
@@ -143,74 +145,301 @@ list(
     format = "file"
   ),
 
-  # TCAC 2.0 corpus embeddings → source=corpus partition ---------------------
-  # All three variants (title / abstract / title_abstract) embedded in one
-  # call and written into the unified database partitioned by (source, variant).
+  # TCAC 2.0 corpus embeddings → source=corpus, one target per variant -------
+  # Each owns its own (config, source, variant) leaf partition; independent
+  # invalidation. embed_works() has a skip guard: existing parquet rows in the
+  # leaf → return without TEI, so prior runs are registered without rebuild.
 
   tar_target(
-    emb_tcac20,
+    emb_tcac20_title,
     embed_works(
       corpus_path = pilot_corpus_tcac20,
       out_dir = "output/TCAC_2.0/embeddings",
       source = "corpus",
       config_name = emb_name,
-      cfg = emb_cfg
+      cfg = emb_cfg,
+      variant_name = "title",
+      preprocessor = variant_preprocessor("title", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title", emb_cfg)$args
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_tcac20_abstract,
+    embed_works(
+      corpus_path = pilot_corpus_tcac20,
+      out_dir = "output/TCAC_2.0/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "abstract",
+      preprocessor = variant_preprocessor("abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("abstract", emb_cfg)$args
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_tcac20_title_abstract,
+    embed_works(
+      corpus_path = pilot_corpus_tcac20,
+      out_dir = "output/TCAC_2.0/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "title_abstract",
+      preprocessor = variant_preprocessor("title_abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title_abstract", emb_cfg)$args
     ),
     format = "file"
   ),
 
-  # Keypaper embeddings → source=keypaper partition in same config ----------
+  # Keypaper embeddings → source=keypaper, one target per variant ------------
 
   tar_target(
-    emb_keypapers,
+    emb_keypapers_title,
     embed_works(
       corpus_path = key_works,
       out_dir = "output/TCAC_2.0/embeddings",
       source = "keypaper",
       config_name = emb_name,
-      cfg = emb_cfg
+      cfg = emb_cfg,
+      variant_name = "title",
+      preprocessor = variant_preprocessor("title", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title", emb_cfg)$args
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_keypapers_abstract,
+    embed_works(
+      corpus_path = key_works,
+      out_dir = "output/TCAC_2.0/embeddings",
+      source = "keypaper",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "abstract",
+      preprocessor = variant_preprocessor("abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("abstract", emb_cfg)$args
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_keypapers_title_abstract,
+    embed_works(
+      corpus_path = key_works,
+      out_dir = "output/TCAC_2.0/embeddings",
+      source = "keypaper",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "title_abstract",
+      preprocessor = variant_preprocessor("title_abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title_abstract", emb_cfg)$args
     ),
     format = "file"
   ),
 
-  # Scoring: one target per variant, reading the unified database ------------
+  # Scoring: one target per variant. dirname() of the variant target gives the
+  # source-level dir; score_keypapers walks up once more to find the shared
+  # config root, so this is wire-compatible with the previous shape.
 
-  # tar_target(
-  #   scores_tcac20_title,
-  #   score_keypapers(
-  #     corpus_emb_dir    = emb_tcac20,
-  #     reference_emb_dir = emb_keypapers,
-  #     variant           = "title",
-  #     out_dir           = "output/TCAC_2.0/scores"
-  #   ),
-  #   format = "file"
-  # ),
-  # tar_target(
-  #   scores_tcac20_abstract,
-  #   score_keypapers(
-  #     corpus_emb_dir    = emb_tcac20,
-  #     reference_emb_dir = emb_keypapers,
-  #     variant           = "abstract",
-  #     out_dir           = "output/TCAC_2.0/scores"
-  #   ),
-  #   format = "file"
-  # ),
-  # tar_target(
-  #   scores_tcac20_title_abstract,
-  #   score_keypapers(
-  #     corpus_emb_dir    = emb_tcac20,
-  #     reference_emb_dir = emb_keypapers,
-  #     variant           = "title_abstract",
-  #     out_dir           = "output/TCAC_2.0/scores"
-  #   ),
-  #   format = "file"
-  # )
+  tar_target(
+    scores_tcac20_title,
+    score_keypapers(
+      corpus_emb_dir = dirname(emb_tcac20_title),
+      reference_emb_dir = dirname(emb_keypapers_title),
+      variant = "title",
+      out_dir = "output/TCAC_2.0/scores"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    scores_tcac20_abstract,
+    score_keypapers(
+      corpus_emb_dir = dirname(emb_tcac20_abstract),
+      reference_emb_dir = dirname(emb_keypapers_abstract),
+      variant = "abstract",
+      out_dir = "output/TCAC_2.0/scores"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    scores_tcac20_title_abstract,
+    score_keypapers(
+      corpus_emb_dir = dirname(emb_tcac20_title_abstract),
+      reference_emb_dir = dirname(emb_keypapers_title_abstract),
+      variant = "title_abstract",
+      out_dir = "output/TCAC_2.0/scores"
+    ),
+    format = "file"
+  ),
 
-  # --- DISABLED: TCAC 1.0 embedding & scoring -------------------------------
-  # Re-enable when TCAC 1.0 processing is needed. Pattern is identical:
-  # add a `pilot_corpus_tcac10` (or skip pilot), then `emb_tcac10` writing
-  # into output/TCAC_1.0/embeddings with source = "corpus", then 3 score
-  # targets pointing at that database + the keypapers embedded there too.
+  # Track config.yaml as a file dep, then expose only the `clustering:` block
+  # as a separate target. Downstream BERTopic targets depend on this subset,
+  # so changes to unrelated config sections (workers, embedding params) do
+  # NOT invalidate topics_tcac20, but any edit to `clustering:` does.
+  tar_target(config_file, "config.yaml", format = "file"),
+  tar_target(
+    clustering_cfg,
+    yaml::read_yaml(config_file)$clustering
+  ),
+
+  # BERTopic clustering. corpus_emb_dir / reference_emb_dir resolve to the
+  # source-level dir via dirname() of the primary variant target; the python
+  # script discovers variant=… partitions inside. fallback_* args are passed
+  # so the fallback variant targets are also DAG dependencies.
+  tar_target(
+    topics_tcac20,
+    run_bertopic(
+      corpus_emb_dir = dirname(emb_tcac20_title_abstract),
+      reference_emb_dir = dirname(emb_keypapers_title_abstract),
+      out_dir = "output/TCAC_2.0/topics",
+      cfg_path = "config.yaml",
+      clustering_cfg = clustering_cfg,
+      fallback_corpus = emb_tcac20_title,
+      fallback_ref = emb_keypapers_title
+    ),
+    format = "file"
+  ),
+
+  # --- Visualisation layer ---------------------------------------------------
+  # Data + figure objects (qs2-serialised) for the report. Each figure target
+  # also writes a static artifact to output/figures/ for quick viewing.
+  tar_target(
+    viz_embeddings,
+    {
+      # Force deps on every variant target so any change invalidates viz.
+      .deps <- list(
+        emb_tcac20_title,
+        emb_tcac20_abstract,
+        emb_tcac20_title_abstract,
+        emb_keypapers_title,
+        emb_keypapers_abstract,
+        emb_keypapers_title_abstract
+      )
+      # All six leaves share the same config dir two levels up.
+      read_embeddings(dirname(dirname(emb_tcac20_title)))
+    },
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_scores_long,
+    read_scores_long(scores_tcac20_title_abstract),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_metadata,
+    viz_metadata_table(viz_embeddings),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_summary_tbl,
+    viz_score_summary(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_quantiles_tbl,
+    viz_score_quantiles(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_dist,
+    viz_score_dist_fig(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_top_bottom,
+    viz_top_bottom_tables(viz_embeddings, scores_tcac20_title_abstract),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_agree_data,
+    viz_variant_agree_data(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_agree_fig,
+    viz_variant_agree_fig(viz_agree_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_threshold,
+    viz_threshold_fig(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap_coords_df,
+    viz_umap_coords(viz_embeddings, variant = "title_abstract"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap_join,
+    viz_umap_data(
+      umap_coords = viz_umap_coords_df,
+      embeddings = viz_embeddings,
+      scores_long = viz_scores_long,
+      corpus_tcac20 = corpus_tcac20,
+      key_works = key_works
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap_bestkp,
+    viz_umap_best_kp(viz_umap_join, scores_tcac20_title_abstract),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap_kp,
+    viz_umap_keypaper(viz_umap_join, viz_umap_bestkp),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap_workmax,
+    viz_umap_work_max(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap_contour_grid,
+    viz_umap_contour(viz_umap_coords_df, viz_umap_join$emb_corpus),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_umap,
+    viz_umap_fig(
+      emb_corpus = viz_umap_join$emb_corpus,
+      emb_keypaper = viz_umap_kp,
+      contour = viz_umap_contour_grid,
+      best_kp_df = viz_umap_bestkp,
+      work_max = viz_umap_workmax
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_topics_tbl_data,
+    viz_topics_table_data(topics_tcac20, viz_embeddings),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_topics_tbl,
+    viz_topics_table(viz_topics_tbl_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_topics,
+    viz_topics_fig(
+      topics_tcac20 = topics_tcac20,
+      emb_corpus = viz_umap_join$emb_corpus,
+      emb_keypaper = viz_umap_kp
+    ),
+    format = qs2_format()
+  ),
+
+  # Render the vectorisation report. Re-builds whenever any score parquet,
+  # the embeddings dataset, or the .qmd itself changes.
+  tarchetypes::tar_quarto(
+    report_vectorisation,
+    path = "TCAC 2.0 Vectorisation.qmd",
+    quiet = TRUE
+  ),
 
   NULL
 )

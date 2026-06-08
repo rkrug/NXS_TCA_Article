@@ -1,111 +1,279 @@
+# Embed one (source, variant) pair and write to a hive-partitioned leaf.
+#
+# Single-variant target so each (source, variant) is independently invalidatable
+# in the targets DAG. Earlier "embed all three variants in one call" version is
+# gone — see plan: let-s-distangle-that-construct-glistening-umbrella.md.
+#
+# Skip guard: if the leaf partition already contains parquet rows, return its
+# path without touching TEI. Makes the function idempotent across targets
+# metadata loss, and lets pre-existing embeddings be registered cheaply.
+#
+# Progress: a background callr watcher tails the scratch dir and emits
+# rate / elapsed / ETA after each shard the embedder writes.
+#
+# Remote TEI (RunPod): cfg may set `scheme: https`, plus
+# `auth_token_keyring: <keyring entry>` to pull a bearer token. Otherwise
+# defaults to plain http://host:port/embed (local Metal TEI).
+
 embed_works <- function(
   corpus_path,
   out_dir,
   source,
   config_name,
   cfg,
-  variants = NULL
+  variant_name,
+  preprocessor,
+  preprocessor_args = list()
 ) {
   if (!source %in% c("corpus", "keypaper")) {
     stop("`source` must be 'corpus' or 'keypaper', got: ", source)
   }
-  if (!is.character(config_name) || length(config_name) != 1L || !nzchar(config_name)) {
-    stop("`config_name` must be a non-empty string")
+  if (!is.character(variant_name) || length(variant_name) != 1L ||
+      !nzchar(variant_name)) {
+    stop("`variant_name` must be a non-empty string.")
+  }
+  if (!is.character(config_name) || length(config_name) != 1L ||
+      !nzchar(config_name)) {
+    stop("`config_name` must be a non-empty string.")
   }
 
-  if (is.null(variants)) {
-    variants <- list(
-      title          = list(prep = preprocessor_title),
-      abstract       = list(prep = preprocessor_abstract),
-      title_abstract = list(
-        prep = preprocessor_title_abstract,
-        args = list(
-          sep       = cfg$sep_token,
-          title_cap = cfg$title_cap_combined
-        )
-      )
-    )
-  }
-
-  backend <- openalexVectorComp::backend_specter2_tei(
-    host  = cfg$host,
-    port  = cfg$port,
-    model = cfg$model
+  leaf_dir <- file.path(
+    out_dir,
+    paste0("config=",  config_name),
+    paste0("source=",  source),
+    paste0("variant=", variant_name)
   )
-  # Override the TEI-reported max_client_batch_size with our cfg value, so the
-  # client packs more inputs into each HTTP request (TEI internally re-batches
-  # to fit max_batch_tokens).
+
+  # ---- Skip guard ---------------------------------------------------------
+  # Marker-based wholeness check:
+  #   * marker present  → trust if marker count == actual leaf count; on
+  #                       mismatch the leaf is partial → wipe + re-embed.
+  #   * marker absent   → migration case (existing parquets from before this
+  #                       refactor). Trust the leaf at face value and stamp a
+  #                       marker. We deliberately don't run the preprocessor
+  #                       here — on the full corpus the per-row `clean_text`
+  #                       pass OOM's the worker before TEI is even contacted.
+  # Future runs always write a marker on success, so partial-run detection
+  # kicks in from the next embed_works invocation onward.
+  existing_parquets <- list.files(
+    leaf_dir, pattern = "\\.parquet$", recursive = TRUE, full.names = FALSE
+  )
+  if (length(existing_parquets) > 0L) {
+    n_have <- tryCatch(
+      arrow::open_dataset(leaf_dir) |>
+        dplyr::count() |> dplyr::collect() |> dplyr::pull(),
+      error = function(e) NA_integer_
+    )
+    n_expected <- read_embed_marker(leaf_dir)
+
+    if (is.na(n_expected)) {
+      message(sprintf(
+        "[%s|%s] leaf has %s rows, no completion marker — trusting (migration) and stamping marker.",
+        source, variant_name,
+        if (is.na(n_have)) "?" else format(n_have, big.mark = ",")
+      ))
+      if (!is.na(n_have)) write_embed_marker(leaf_dir, n_have)
+      return(leaf_dir)
+    }
+
+    if (!is.na(n_have) && n_have == n_expected) {
+      message(sprintf(
+        "[%s|%s] leaf complete (%s rows) — skipping TEI.",
+        source, variant_name, format(n_have, big.mark = ",")
+      ))
+      return(leaf_dir)
+    }
+
+    message(sprintf(
+      "[%s|%s] leaf partial: actual=%s vs marker=%s — wiping and re-embedding.",
+      source, variant_name,
+      if (is.na(n_have)) "?" else format(n_have, big.mark = ","),
+      format(n_expected, big.mark = ",")
+    ))
+    unlink(leaf_dir, recursive = TRUE)
+  }
+
+  # ---- Backend -----------------------------------------------------------
+  backend <- build_tei_backend(cfg)
+  info <- openalexVectorComp::backend_info(backend)
+  model_id   <- if (!is.null(info$model_id) && nzchar(info$model_id)) {
+    info$model_id
+  } else {
+    cfg$model
+  }
+  model_part <- gsub("/", "_", model_id, fixed = TRUE)
+
+  # ---- Scratch dir layout (mirrors openalexVectorComp::embed_corpus) -----
+  corpus_name <- basename(corpus_path)
+  scratch_project <- file.path(
+    out_dir, ".raw", config_name, source, variant_name
+  )
+  unlink(scratch_project, recursive = TRUE)
+  dir.create(scratch_project, recursive = TRUE, showWarnings = FALSE)
+  file.symlink(
+    normalizePath(corpus_path, mustWork = TRUE),
+    file.path(scratch_project, corpus_name)
+  )
+  raw_label_dir <- file.path(
+    scratch_project, "embeddings",
+    paste0("model_id=", model_part),
+    paste0("label=", variant_name)
+  )
+
+  # ---- Progress watcher --------------------------------------------------
+  n_in <- tryCatch(
+    arrow::open_dataset(corpus_path) |>
+      dplyr::count() |> dplyr::collect() |> dplyr::pull(),
+    error = function(e) NA_integer_
+  )
+  watcher <- NULL
+  if (!is.na(n_in) && n_in > 0) {
+    watcher <- start_shard_watcher(
+      scratch_dir = raw_label_dir,
+      n_in        = n_in,
+      batch_size  = cfg$batch_size,
+      label       = sprintf("%s|%s", source, variant_name)
+    )
+    on.exit(stop_shard_watcher(watcher), add = TRUE)
+  }
+
+  # ---- Embed -------------------------------------------------------------
+  message(sprintf(
+    "--- config = %s, source = %s, variant = %s, input rows = %s ---",
+    config_name, source, variant_name,
+    if (is.na(n_in)) "?" else format(n_in, big.mark = ",")
+  ))
+
+  cleaner_args <- if (length(preprocessor_args)) preprocessor_args else list()
+  # Local drop-in replacement for openalexVectorComp::embed_corpus() that
+  # parallelises ONLY the HTTP layer when cfg$concurrency > 1. concurrency = 1
+  # (the default) is behaviourally identical to a sequential embed_corpus().
+  embed_corpus_parallel(
+    project_dir       = scratch_project,
+    backend           = backend,
+    corpus_name       = corpus_name,
+    label             = variant_name,
+    batch_size        = cfg$batch_size,
+    text_preprocessor = preprocessor,
+    cleaner_args      = cleaner_args,
+    concurrency       = if (is.null(cfg$concurrency)) 1L else as.integer(cfg$concurrency),
+    verbose           = TRUE
+  )
+
+  # ---- Re-partition into the unified layout (config, source, variant) ---
+  # Streaming via lazy dplyr-on-arrow + arrow::write_dataset. Never materialises
+  # the full embedding matrix in R — earlier `collect()`-first version OOM'd at
+  # ~4.6M rows on macOS. Each scratch shard is read, partition cols stamped,
+  # and written one at a time.
+  arrow::open_dataset(
+    raw_label_dir,
+    factory_options = list(exclude_invalid_files = TRUE)
+  ) |>
+    dplyr::mutate(
+      config  = !!config_name,
+      source  = !!source,
+      variant = !!variant_name
+    ) |>
+    arrow::write_dataset(
+      path         = out_dir,
+      partitioning = c("config", "source", "variant"),
+      format       = "parquet",
+      existing_data_behavior = "delete_matching"
+    )
+
+  # Record the completion count so the skip guard can verify wholeness on
+  # subsequent runs without re-running the preprocessor.
+  n_written <- nrow(arrow::open_dataset(leaf_dir))
+  write_embed_marker(leaf_dir, n_written)
+
+  unlink(scratch_project, recursive = TRUE)
+  leaf_dir
+}
+
+# ----------------------------------------------------------------------------
+# Backend builder.
+# - cfg$scheme + cfg$host + cfg$port construct the TEI /embed URL.
+# - cfg$auth_token_keyring (optional) names a keyring entry whose secret is
+#   exported as OVC_API_TOKEN so the package's request layer attaches it as
+#   Authorization: Bearer <token>.
+# - cfg$max_batch_size overrides the TEI-reported max client batch size.
+# ----------------------------------------------------------------------------
+build_tei_backend <- function(cfg) {
+  if (!is.null(cfg$auth_token_keyring) && nzchar(cfg$auth_token_keyring)) {
+    tok <- tryCatch(
+      keyring::key_get(cfg$auth_token_keyring),
+      error = function(e) stop(sprintf(
+        "Could not retrieve auth token from keyring entry '%s': %s",
+        cfg$auth_token_keyring, conditionMessage(e)
+      ))
+    )
+    Sys.setenv(OVC_API_TOKEN = tok)
+  }
+  scheme <- if (!is.null(cfg$scheme) && nzchar(cfg$scheme)) cfg$scheme else "http"
+  tei_url <- sprintf("%s://%s:%d/embed", scheme, cfg$host, as.integer(cfg$port))
+  backend <- openalexVectorComp::backend_config(
+    provider = "tei",
+    tei_url  = tei_url,
+    model    = cfg$model
+  )
   if (!is.null(cfg$max_batch_size)) {
     backend$max_batch_size <- as.integer(cfg$max_batch_size)
   }
-  # Mirror whatever embed_corpus writes (model_id from backend_info — driven by
-  # TEI's served_model_name when configured).
-  info <- openalexVectorComp::backend_info(backend)
-  model_id   <- if (!is.null(info$model_id) && nzchar(info$model_id)) info$model_id else cfg$model
-  model_part <- gsub("/", "_", model_id, fixed = TRUE)
+  backend
+}
 
-  project_folder <- dirname(corpus_path)
-  corpus_name    <- basename(corpus_path)
+# ----------------------------------------------------------------------------
+# Completion marker — written next to the parquet shards after a successful
+# embed_works run; records the row count so subsequent runs can verify the
+# leaf is whole (and detect partial / crashed prior runs).
+# ----------------------------------------------------------------------------
+embed_marker_path <- function(leaf_dir) {
+  file.path(leaf_dir, ".embed_complete")
+}
 
-  scratch_root <- file.path(out_dir, ".raw", config_name, source)
-  unlink(scratch_root, recursive = TRUE)
-  dir.create(scratch_root, recursive = TRUE, showWarnings = FALSE)
+read_embed_marker <- function(leaf_dir) {
+  p <- embed_marker_path(leaf_dir)
+  if (!file.exists(p)) return(NA_integer_)
+  n <- suppressWarnings(as.integer(readLines(p, n = 1L, warn = FALSE)))
+  if (!isTRUE(is.finite(n))) NA_integer_ else n
+}
 
-  per_variant_dfs <- list()
+write_embed_marker <- function(leaf_dir, n) {
+  dir.create(leaf_dir, recursive = TRUE, showWarnings = FALSE)
+  writeLines(as.character(as.integer(n)), embed_marker_path(leaf_dir))
+}
 
-  for (vname in names(variants)) {
-    v <- variants[[vname]]
-    cleaner_args <- if (is.null(v$args)) list() else v$args
-
-    message(sprintf("--- config = %s, source = %s, variant = %s ---",
-                    config_name, source, vname))
-
-    scratch_project <- file.path(scratch_root, vname)
-    dir.create(scratch_project, recursive = TRUE, showWarnings = FALSE)
-    file.symlink(
-      normalizePath(corpus_path, mustWork = TRUE),
-      file.path(scratch_project, corpus_name)
-    )
-
-    openalexVectorComp::embed_corpus(
-      project_dir       = scratch_project,
-      backend           = backend,
-      corpus_name       = corpus_name,
-      label             = vname,
-      batch_size        = cfg$batch_size,
-      text_preprocessor = v$prep,
-      cleaner_args      = cleaner_args,
-      verbose           = FALSE
-    )
-
-    raw_label_dir <- file.path(
-      scratch_project, "embeddings",
-      paste0("model_id=", model_part),
-      paste0("label=", vname)
-    )
-
-    df <- arrow::open_dataset(
-      raw_label_dir,
-      factory_options = list(exclude_invalid_files = TRUE)
-    ) |>
-      dplyr::collect()
-    df$config  <- config_name
-    df$source  <- source
-    df$variant <- vname
-    per_variant_dfs[[vname]] <- df
-  }
-
-  combined <- dplyr::bind_rows(per_variant_dfs)
-
-  arrow::write_dataset(
-    combined,
-    path         = out_dir,
-    partitioning = c("config", "source", "variant"),
-    format       = "parquet",
-    existing_data_behavior = "delete_matching"
+# Expected leaf-row count = output of applying the preprocessor to the full
+# input corpus (some variants drop rows, e.g. abstract skips works without
+# an abstract). Cost: one full preprocessor pass — only invoked when a leaf
+# exists without a marker (migration) or when we suspect a mismatch.
+expected_post_prep_count <- function(corpus_path, preprocessor,
+                                     preprocessor_args = list()) {
+  df <- tryCatch(
+    arrow::open_dataset(corpus_path) |> dplyr::collect(),
+    error = function(e) NULL
   )
+  if (is.null(df)) return(NA_integer_)
+  args <- c(list(df), preprocessor_args)
+  out <- tryCatch(do.call(preprocessor, args), error = function(e) NULL)
+  if (is.null(out)) NA_integer_ else nrow(out)
+}
 
-  unlink(scratch_root, recursive = TRUE)
-
-  file.path(out_dir, paste0("config=", config_name), paste0("source=", source))
+# Variant → preprocessor lookup used by _targets.R when wiring the 6 emb
+# targets. Centralised here so adding a variant only touches this file +
+# _targets.R.
+variant_preprocessor <- function(variant_name, cfg) {
+  switch(
+    variant_name,
+    title          = list(prep = preprocessor_title,          args = list()),
+    abstract       = list(prep = preprocessor_abstract,       args = list()),
+    title_abstract = list(
+      prep = preprocessor_title_abstract,
+      args = list(
+        sep       = cfg$sep_token,
+        title_cap = cfg$title_cap_combined
+      )
+    ),
+    stop("Unknown variant_name: ", variant_name)
+  )
 }
