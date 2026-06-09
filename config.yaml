@@ -31,7 +31,7 @@ embeddings:
   # RunPod-hosted TEI on a rented L40s/A100/H100. Flip active_embedding above and
   # populate host/auth before use. See scripts/start_tei_runpod.sh.
   SPECTER2_runpod:
-    host: r6r5xht9qpyhm1-8080.proxy.runpod.net
+    host: zinfjt034qan11-8080.proxy.runpod.net
     port: 443
     scheme: https
     # auth_token_keyring: API_TEI   # keyring::key_set("API_TEI") first
@@ -59,8 +59,64 @@ embeddings:
   #   max_batch_tokens: 65536
   #   max_concurrent: 512
 
-# BERTopic clustering on the SPECTER2 embeddings.
-# Consumed by scripts/run_bertopic.py via R/run_bertopic.R.
+# NEW: dual-path BERTopic. Each named entry under `configs:` produces its
+# own (config, bertopic, variant) leaf under output/TCAC_2.0/topics/, so
+# multiple runs coexist on disk for comparison. Add entries by appending
+# under `configs:` and pointing one of the `active_*` keys at the new name.
+bertopic:
+  active_local:   default_local        # which entry drives topics_tcac20_local
+  active_runpod:  default_runpod       # which entry drives topics_tcac20_runpod
+  active_for_viz: default_local        # which run feeds viz_topics_* in the report
+
+  configs:
+    default_local:
+      method: local
+      sample_size: 200000              # rows to fit BERTopic on; transfer the rest
+      umap_n_components: 5
+      umap_n_neighbors:  30
+      umap_min_dist:     0.0
+      umap_metric:       cosine
+      hdbscan_min_cluster_size: 200
+      hdbscan_min_samples:      50
+      top_n_words:        15
+      keypaper_threshold:  5
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        10
+      vectorizer_max_df:        0.5
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+    default_runpod:
+      method: runpod
+      # SSH transport to the RunPod bertopic-runpod pod
+      ssh_host:        <pod-id>.ssh.runpod.io
+      ssh_port:        22
+      ssh_user:        root
+      ssh_key_path:    ~/.ssh/id_ed25519
+      remote_workdir:  /work
+      # Same BERTopic knobs as Path A (full-fit so no sample_size)
+      umap_n_components: 5
+      umap_n_neighbors:  30
+      umap_min_dist:     0.0
+      umap_metric:       cosine
+      hdbscan_min_cluster_size: 200
+      hdbscan_min_samples:      50
+      top_n_words:        15
+      keypaper_threshold:  5
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        10
+      vectorizer_max_df:        0.5
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+# DEPRECATED: original single-path BERTopic config. Kept temporarily so
+# the existing topics_tcac20 target's command still parses while the embed
+# pipeline is running. To be removed once _targets.R is rewired to use the
+# bertopic: block (post-embed-run).
 clustering:
   # UMAP for cluster space (separate from the 2D visualisation UMAP)
   umap_n_components: 5

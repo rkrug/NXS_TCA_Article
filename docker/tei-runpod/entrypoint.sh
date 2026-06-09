@@ -10,6 +10,22 @@ set -euo pipefail
 : "${TEI_MAX_CLIENT_BATCH:=512}"
 : "${TEI_SERVED_NAME:=allenai/specter2_proximity_merged}"
 : "${MODEL_PATH:=/model}"
+: "${LOG_DIR:=/workspace}"          # volume-mounted: logs survive stop/restart
+
+# Persist logs to the volume so a crashed pod's last words survive a
+# restart. Rotate one generation: <svc>-current.log → <svc>-previous.log
+# at every boot. Old previous gets overwritten — no unbounded growth.
+mkdir -p "${LOG_DIR}"
+if [ -f "${LOG_DIR}/tei-current.log" ]; then
+    mv -f "${LOG_DIR}/tei-current.log" "${LOG_DIR}/tei-previous.log"
+fi
+TEI_LOG="${LOG_DIR}/tei-current.log"
+
+# Tee this shell's stdout+stderr (and everything that inherits its fds,
+# including the watchdog launched below) into the persistent log file
+# while still streaming to the RunPod Logs panel.
+exec > >(tee -a "${TEI_LOG}") 2>&1
+echo "[entrypoint] persisting logs to ${TEI_LOG} (prior: ${LOG_DIR}/tei-previous.log)"
 
 if [ ! -f "${MODEL_PATH}/config.json" ]; then
     echo "Merged SPECTER2 model not found at ${MODEL_PATH}/config.json" >&2

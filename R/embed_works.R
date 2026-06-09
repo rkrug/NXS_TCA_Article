@@ -161,25 +161,28 @@ embed_works <- function(
   )
 
   # ---- Re-partition into the unified layout (config, source, variant) ---
-  # Streaming via lazy dplyr-on-arrow + arrow::write_dataset. Never materialises
-  # the full embedding matrix in R — earlier `collect()`-first version OOM'd at
-  # ~4.6M rows on macOS. Each scratch shard is read, partition cols stamped,
-  # and written one at a time.
-  arrow::open_dataset(
-    raw_label_dir,
-    factory_options = list(exclude_invalid_files = TRUE)
-  ) |>
-    dplyr::mutate(
-      config  = !!config_name,
-      source  = !!source,
-      variant = !!variant_name
-    ) |>
-    arrow::write_dataset(
-      path         = out_dir,
-      partitioning = c("config", "source", "variant"),
-      format       = "parquet",
-      existing_data_behavior = "delete_matching"
-    )
+  # Per-shard read → stamp partition columns → write. Earlier versions used
+  # `collect()` (OOM at 4.6M rows) and then `arrow::write_dataset` with a
+  # lazy `mutate` query (OOM again at 5.77M). Both buffered too much. This
+  # loop processes one ~5000-row shard at a time → peak RAM stays ~30 MB
+  # regardless of corpus size, and the schema is identical to embed_corpus's
+  # native output (config/source/variant present as columns in each file).
+  shards <- list.files(
+    raw_label_dir, pattern = "[.]parquet$", recursive = TRUE, full.names = TRUE
+  )
+  if (length(shards) == 0L) {
+    stop("No scratch parquets found under: ", raw_label_dir)
+  }
+  dir.create(leaf_dir, recursive = TRUE, showWarnings = FALSE)
+  message(sprintf("[%s|%s] re-partitioning %d shards into leaf",
+                  source, variant_name, length(shards)))
+  for (i in seq_along(shards)) {
+    df <- arrow::read_parquet(shards[i])
+    df$config  <- config_name
+    df$source  <- source
+    df$variant <- variant_name
+    arrow::write_parquet(df, file.path(leaf_dir, basename(shards[i])))
+  }
 
   # Record the completion count so the skip guard can verify wholeness on
   # subsequent runs without re-running the preprocessor.

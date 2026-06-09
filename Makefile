@@ -1,59 +1,48 @@
-.PHONY: help renv-status renv-snapshot renv-restore renv-update renv-deps renv-clean renv-init \
-        pkgdown-build pkgdown-articles pkgdown-reference pkgdown-home pkgdown-news pkgdown-clean \
-        readme tar-make tar-visnetwork tar-outdated tar-invalidate tar-clean
+# ----------------------------------------------------------------------------
+# TCAC 2.0 — operator interface.
+#
+# `make help` prints all targets.
+# Override image versions on the command line:
+#   make docker-tei-build       VERSION=v0.1.1
+#   make docker-bertopic-push   VERSION=v0.1.2
+# ----------------------------------------------------------------------------
+
+# Image registry namespace. Override with REGISTRY=ghcr.io/<other-user> if you fork.
+REGISTRY ?= ghcr.io/rkrug
+
+# Default image version. Bump for each new build (see docker/*/CHANGES.md).
+VERSION  ?= v0.1.0
+
+# TEI CUDA tag (Hopper/Ada L40S = 89-1.5). See docker/tei-runpod/README.md.
+TEI_TAG  ?= 89-1.5
+
+# Docker buildx platform — RunPod nodes are amd64 even from Apple Silicon.
+PLATFORM ?= linux/amd64
+
+.PHONY: help \
+        tar-make tar-visnetwork tar-outdated tar-invalidate tar-clean \
+        docker-tei-build docker-tei-push docker-tei \
+        docker-bertopic-build docker-bertopic-push docker-bertopic \
+        docker-all
 
 help: ## Show this help message
-	@echo "Available targets:"
+	@echo "TCAC 2.0 make targets:"
 	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+	  awk 'BEGIN {FS = ":.*?## "}; {printf "  %-26s %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Variables (override on the make command line):"
+	@echo "  REGISTRY=$(REGISTRY)"
+	@echo "  VERSION=$(VERSION)"
+	@echo "  TEI_TAG=$(TEI_TAG)"
+	@echo "  PLATFORM=$(PLATFORM)"
 
-renv-status: ## Check if lockfile is in sync with library and source files
-	Rscript -e "renv::status()"
-
-renv-snapshot: ## Save current package state to lockfile
-	Rscript -e "renv::snapshot()"
-
-renv-restore: ## Install packages from lockfile
-	Rscript -e "renv::restore()"
-
-renv-update: ## Update all packages
-	Rscript -e "renv::update()"
-
-renv-deps: ## Show detected package dependencies
-	Rscript -e "renv::dependencies()"
-
-renv-clean: ## Remove unused packages from library
-	Rscript -e "renv::clean()"
-
-renv-init: ## Initialize renv (run once when setting up project)
-	Rscript -e "renv::init()"
-
-# pkgdown targets
-
-pkgdown-build: ## Build the complete pkgdown site
-	Rscript -e "pkgdown::build_site()"
-
-pkgdown-articles: ## Build only the articles/vignettes
-	Rscript -e "pkgdown::build_articles()"
-
-pkgdown-reference: ## Build only the function reference
-	Rscript -e "pkgdown::build_reference()"
-
-pkgdown-home: ## Build only the home page
-	Rscript -e "pkgdown::build_home()"
-
-pkgdown-news: ## Build only the news/changelog
-	Rscript -e "pkgdown::build_news()"
-
-pkgdown-clean: ## Remove the built pkgdown site
-	Rscript -e "pkgdown::clean_site()"
-
-# targets pipeline
+# --- targets pipeline -------------------------------------------------------
 
 tar-make: ## Run the targets pipeline
 	Rscript -e "targets::tar_make()"
 
-tar-visnetwork: ## Visualize the targets pipeline
+tar-visnetwork: ## Visualise the targets pipeline as a network
 	Rscript -e "targets::tar_visnetwork()"
 
 tar-outdated: ## List outdated targets
@@ -64,3 +53,37 @@ tar-invalidate: ## Invalidate all targets (force rebuild)
 
 tar-clean: ## Remove all target outputs
 	Rscript -e "targets::tar_destroy()"
+
+# --- docker images ----------------------------------------------------------
+# Each image has a build target, a push target, and a combined build+push.
+# Bump VERSION (and document in docker/*/CHANGES.md) before rebuilding.
+
+docker-tei-build: ## Build TEI images (proximity + adhoc_query adapters)
+	docker buildx build --platform $(PLATFORM) \
+	    -t $(REGISTRY)/tei-specter2:proximity-$(VERSION) \
+	    --build-arg ADAPTER=proximity \
+	    --build-arg TEI_TAG=$(TEI_TAG) \
+	    -f docker/tei-runpod/Dockerfile .
+	docker buildx build --platform $(PLATFORM) \
+	    -t $(REGISTRY)/tei-specter2:adhoc_query-$(VERSION) \
+	    --build-arg ADAPTER=adhoc_query \
+	    --build-arg TEI_TAG=$(TEI_TAG) \
+	    -f docker/tei-runpod/Dockerfile .
+
+docker-tei-push: ## Push TEI images to the registry
+	docker push $(REGISTRY)/tei-specter2:proximity-$(VERSION)
+	docker push $(REGISTRY)/tei-specter2:adhoc_query-$(VERSION)
+
+docker-tei: docker-tei-build docker-tei-push ## Build + push TEI images
+
+docker-bertopic-build: ## Build the BERTopic RunPod image
+	docker buildx build --platform $(PLATFORM) \
+	    -t $(REGISTRY)/bertopic-runpod:$(VERSION) \
+	    -f docker/bertopic-runpod/Dockerfile .
+
+docker-bertopic-push: ## Push the BERTopic RunPod image to the registry
+	docker push $(REGISTRY)/bertopic-runpod:$(VERSION)
+
+docker-bertopic: docker-bertopic-build docker-bertopic-push ## Build + push BERTopic image
+
+docker-all: docker-tei docker-bertopic ## Build + push all docker images

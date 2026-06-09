@@ -61,7 +61,7 @@ RUN test -f /merged/config.json
 FROM ghcr.io/huggingface/text-embeddings-inference:${TEI_TAG} AS runtime
 
 ARG ADAPTER
-LABEL org.opencontainers.image.source="https://github.com/<you>/TCAC-2-0" \
+LABEL org.opencontainers.image.source=https://github.com/rkrug/TCAC-2.0 \
       org.opencontainers.image.description="TEI server with merged SPECTER2 ${ADAPTER} adapter, ready for RunPod."
 
 # Merged model lives at /model inside the image.
