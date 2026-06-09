@@ -96,19 +96,23 @@ bertopic:
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work
-      # Same BERTopic knobs as Path A (full-fit so no sample_size)
+      # BERTopic knobs scaled for full-corpus fit (~4.6M title_abstract rows
+      # + 105 keypapers). See TD_BERTopic.md for the reasoning behind each
+      # value.
       umap_n_components: 5
-      umap_n_neighbors:  30
+      umap_n_neighbors:  30                  # full-corpus density supports larger neighborhood
       umap_min_dist:     0.0
       umap_metric:       cosine
-      hdbscan_min_cluster_size: 200
-      hdbscan_min_samples:      50
-      top_n_words:        15
-      keypaper_threshold:  5
+      # 500 ≈ 0.01% of corpus → expect ~200–500 topics. Tune up if too many
+      # micro-topics, tune down if signal is too coarse.
+      hdbscan_min_cluster_size: 500
+      hdbscan_min_samples:       50
+      top_n_words:         15
+      keypaper_threshold:   3                # 105 keypapers spread over ~200–500 topics
       primary_variant:    title_abstract
       fallback_variant:   title
-      vectorizer_min_df:        10
-      vectorizer_max_df:        0.5
+      vectorizer_min_df:        2            # per-topic concat doc, not per-corpus doc
+      vectorizer_max_df:        0.95
       vectorizer_max_features:  20000
       vectorizer_ngram:        [1, 2]
       random_seed: 13

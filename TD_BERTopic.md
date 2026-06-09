@@ -112,39 +112,73 @@ their `title` embedding.**
 Both embeddings come from the same SPECTER2 model and live in the same 768-D
 space, so nearest-centroid transfer is mathematically sensible.
 
-## Config (`config.yaml` → `clustering:` block)
+## Config (`config.yaml` → `bertopic:` block)
+
+The dual-path layout: each named entry under `bertopic.configs:` produces
+its own `(config, bertopic, variant)` hive partition under
+`output/TCAC_2.0/topics/`, so multiple runs coexist on disk for
+comparison. `bertopic.active_local` and `bertopic.active_runpod` pick
+which config feeds the two pipeline targets.
 
 ```yaml
-clustering:
-  # UMAP for cluster space (separate from the 2D vis UMAP in the report)
-  umap_n_components: 5
-  umap_n_neighbors:  15
-  umap_min_dist:     0.0
-  umap_metric:       cosine
+bertopic:
+  active_local:   default_local
+  active_runpod:  default_runpod
+  active_for_viz: default_local         # which run feeds the report
 
-  # HDBSCAN
-  hdbscan_min_cluster_size: 10
-  hdbscan_min_samples:      5
-
-  # Topic representation
-  top_n_words:        10        # for c-TF-IDF labels
-  keypaper_threshold: 2         # topic is "relevant" if it contains ≥ N keypapers
-
-  # Variant + fallback strategy
-  primary_variant:  title_abstract
-  fallback_variant: title       # null disables transfer; works without primary stay topic = -1
-
-  # Reproducibility
-  random_seed: 42
+  configs:
+    default_local:  { method: local,  ... }
+    default_runpod: { method: runpod, ... }
 ```
 
-| Knob | Rationale |
-|---|---|
-| `umap_n_components: 5` | Clustering deserves more dimensions than the 2D vis UMAP. BERTopic default. |
-| `umap_metric: cosine` | Matches the embedding space metric. |
-| `hdbscan_min_cluster_size: 10` | At ~1140 pilot points, 10 ≈ 1 % yields ~30–80 topics. |
-| `keypaper_threshold: 2` | Single keypaper could be noise; two is a deliberate signal. |
-| `primary_variant` / `fallback_variant` | Implements approach (A) above. |
+### Parameter reference
+
+Every parameter under each named config, with current default and reasoning.
+Path A (`default_local`) fits on a sample; Path B (`default_runpod`) fits on
+the full corpus. Same parameter names, different scale-appropriate values.
+
+| Parameter | Path A default | Path B default | Why this value? Why is it different? |
+|---|---|---|---|
+| `method` | `local` | `runpod` | Dispatcher key; selects R wrapper / Python script pair. |
+| `sample_size` | `200000` | *(n/a — full fit)* | Path A fits BERTopic on a uniform random sample of this size + all keypapers, then transforms the rest via `approximate_predict`. 200K is the largest sample that fits the laptop's RAM budget while still anchoring keypaper neighborhoods reasonably. Path B uses the full 4.6M-row primary variant on the L40S — no sampling needed. |
+| `umap_n_components` | `5` | `5` | BERTopic standard for clustering UMAP; balances information preservation against HDBSCAN's curse-of-dimensionality at higher dims. (The viz UMAP is separately 2-D.) |
+| `umap_n_neighbors` | `15` | `30` | UMAP's locality knob. At 200K (Path A), `15` keeps clusters tight enough that HDBSCAN can separate fine-grained topics. At 4.6M (Path B), `30` preserves more global structure without exploding compute; with more data the larger neighborhood is statistically stable. |
+| `umap_min_dist` | `0.0` | `0.0` | BERTopic standard — tight clusters in the reduced space so HDBSCAN finds them. |
+| `umap_metric` | `cosine` | `cosine` | SPECTER2 was trained with cosine similarity; matches the embedding geometry. |
+| `hdbscan_min_cluster_size` | `25` | `500` | Smallest cluster HDBSCAN will keep; smaller values yield more, finer topics. Scales roughly as 0.01% of the fitted population: `200K → ~25`, `4.6M → ~500`. Path A's `25` was the smallest value that didn't trigger the c-TF-IDF "max_df < min_df" error in early iteration; higher values produced too few topics. Path B's `500` is a starting point — expect to tune to 200–1000 based on the first result. |
+| `hdbscan_min_samples` | `5` | `50` | HDBSCAN's noise tolerance — points without at least this many neighbors within the cluster-size neighborhood are labelled noise. Scales with `min_cluster_size`. |
+| `top_n_words` | `15` | `15` | c-TF-IDF returns the top N terms per topic. 15 is readable for the topic table in the report (10 is terse, 25 is noisy). |
+| `keypaper_threshold` | `3` | `3` | A topic is `is_relevant = TRUE` when it contains ≥ N keypapers. With 105 keypapers spread over ~200–1500 topics, ≥3 keypapers per "TCAC-relevant" topic is a defensible weak signal. Original pilot used 2 (too lenient at scale, every random co-occurrence triggered it); 5 was tried and excluded genuine signal. |
+| `primary_variant` | `title_abstract` | `title_abstract` | The richer of the two embedding variants — works that have both fields produce vectors that capture topical structure best. |
+| `fallback_variant` | `title` | `title` | For corpus rows without abstracts (~20%), use the title-only embedding to assign a topic via UMAP transform. Set to `null` to leave those works un-clustered. |
+| `vectorizer_min_df` | `2` | `2` | CountVectorizer's "word must appear in ≥ N documents". **BERTopic applies the vectorizer to per-topic concatenated text**, so "documents" here = number of topics, not corpus size. With ~200–1500 topics, `min_df=2` keeps real terms while filtering true singletons. Earlier values of 10 caused sklearn errors when HDBSCAN produced too few topics. |
+| `vectorizer_max_df` | `0.95` | `0.95` | "Word must appear in ≤ N% of documents". `0.95` filters near-universal terms (stop words, generic methodology jargon) without losing real topic-distinguishing words. Earlier value of `0.5` was too aggressive at the per-topic-document scale. |
+| `vectorizer_max_features` | `20000` | `20000` | Vocabulary cap. Bounds c-TF-IDF memory regardless of corpus size. 20K is the upper end of useful vocabulary for English scientific text. |
+| `vectorizer_ngram` | `[1, 2]` | `[1, 2]` | Unigrams + bigrams. Bigrams produce more readable topic labels ("transformative change", "global warming") than unigrams alone. Trigrams add little signal and a lot of vocabulary explosion. |
+| `random_seed` | `13` | `13` | Reproducibility. UMAP + HDBSCAN are deterministic given the seed; re-running the same cfg produces byte-identical outputs. |
+
+### Path B specific transport fields
+
+Only on `default_runpod`:
+
+| Field | Default | Why |
+|---|---|---|
+| `ssh_host` | `<pod-id>.ssh.runpod.io` | Filled in after the pod is up — RunPod assigns the host on boot. |
+| `ssh_port` | `22` | Standard SSH; the docker/bertopic-runpod image exposes it on TCP/22. |
+| `ssh_user` | `root` | RunPod containers run as root. |
+| `ssh_key_path` | `~/.ssh/id_ed25519` | Used by `R/run_bertopic_runpod.R` for both rsync upload and the ssh-triggered run. Must match the key pasted into the pod template's `PUBLIC_KEY` env var. |
+| `remote_workdir` | `/work` | Volume-mounted dir on the pod where embeddings get rsync'd to and where the GPU script writes its outputs. |
+
+### Tuning workflow
+
+1. Edit a param in `config.yaml`.
+2. `targets::tar_make(names = "topics_tcac20_local")` (or `_runpod`).
+3. The marker file stores a xxhash64 of the cfg; the skip-guard sees the
+   hash changed and dispatches a fresh run.
+4. No manual leaf wipe needed between iterations.
+
+Swapping `active_for_viz` between runs is free — both named runs persist
+on disk and the report just picks whichever is set.
 
 ## Files
 
