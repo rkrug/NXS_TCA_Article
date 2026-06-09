@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """
-BERTopic clustering — local (CPU) sample-fit + transform-everything mode.
+BERTopic clustering — local (CPU) sample-fit + transform-everything mode,
+memory-bounded.
 
-Reads the (config, source, variant)-partitioned embedding parquet dataset,
-fits BERTopic on a random sample of the corpus + ALL keypapers in the
-primary variant, then projects every remaining corpus work in BOTH the
-primary AND the fallback variant onto the fitted UMAP/HDBSCAN model, so
-that every corpus work and every keypaper receives a topic_id.
+Fits BERTopic on a stratified sample of the corpus primary variant + ALL
+keypapers, then projects every remaining corpus work in BOTH the primary
+AND the fallback variant onto the fitted UMAP/HDBSCAN model so that
+every corpus work and every keypaper receives a topic_id.
+
+Earlier versions materialised the entire corpus primary (~4.6M × 768
+floats ≈ 14 GB) into a single pandas DataFrame and OOM'd on macOS. This
+version streams sampling + transform via duckdb so peak RAM stays at
+~50K rows × 768 floats ≈ 150 MB per chunk plus the fit-time matrix.
 
 Output (3 parquets + marker stamped by the R wrapper):
 
     <output_dir>/config=<X>/bertopic=<run_name>/variant=<primary>/topics.parquet
     <output_dir>/config=<X>/bertopic=<run_name>/variant=<primary>/topic_info.parquet
     <output_dir>/config=<X>/bertopic=<run_name>/variant=<primary>/topic_words.parquet
-
-All hyperparameters come from the YAML at --bertopic-cfg-yaml; no script-
-level defaults beyond what BERTopic / UMAP / HDBSCAN provide if a knob is
-missing. Self-contained — drop into openalexVectorComp/inst/scripts/.
 
 Usage:
     python run_bertopic_local.py \\
@@ -35,12 +36,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow.dataset as ds
+import pyarrow.dataset as pads
 import yaml
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Schema helpers (shared with run_bertopic_gpu.py)
 # ---------------------------------------------------------------------------
 
 def _embedding_columns(table_columns):
@@ -49,28 +50,12 @@ def _embedding_columns(table_columns):
     return sorted(ev, key=lambda c: int(c[1:]))
 
 
-def _read_source_variant(emb_root: Path, variant: str) -> pd.DataFrame:
-    """
-    Read all rows for a given variant from a source directory.
-
-    emb_root looks like: .../config=<X>/source=corpus
-    """
-    variant_dir = emb_root / f"variant={variant}"
-    if not variant_dir.is_dir():
-        raise FileNotFoundError(f"No partition: {variant_dir}")
-    dset = ds.dataset(str(variant_dir), format="parquet")
-    cols = dset.schema.names
-    keep = ["id", "title_clean", "abstract_clean"]
-    keep = [c for c in keep if c in cols] + _embedding_columns(cols)
-    return dset.to_table(columns=keep).to_pandas()
+def _matrix_from_df(df: pd.DataFrame) -> np.ndarray:
+    cols = _embedding_columns(df.columns)
+    return df[cols].to_numpy(dtype=np.float32)
 
 
-def _matrix(df: pd.DataFrame) -> np.ndarray:
-    return df[_embedding_columns(df.columns)].to_numpy(dtype=np.float32)
-
-
-def _docs(df: pd.DataFrame) -> list[str]:
-    """Cleaned title + abstract for c-TF-IDF input."""
+def _docs_from_df(df: pd.DataFrame) -> list[str]:
     title = df.get("title_clean", pd.Series([""] * len(df))).fillna("")
     abstract = df.get("abstract_clean", pd.Series([""] * len(df))).fillna("")
     return (title.astype(str) + " " + abstract.astype(str)).tolist()
@@ -83,24 +68,103 @@ def _leaf_dir(out_root: Path, config_name: str, run_name: str,
     return p
 
 
-def _chunked_transform(topic_model, df: pd.DataFrame,
-                       chunk_size: int = 50_000) -> np.ndarray:
+# ---------------------------------------------------------------------------
+# Data loaders — all streamed via duckdb except small full-load of keypapers
+# ---------------------------------------------------------------------------
+
+def _read_full_variant(emb_root: Path, variant: str) -> pd.DataFrame:
     """
-    Project + predict in chunks so we don't blow up memory on the full
-    non-sampled corpus. Returns a 1-D int array of topic_ids aligned with df.
+    Materialise an entire variant into pandas. Use ONLY for small variants
+    like the keypapers reference set (~100 rows). For the corpus primary
+    variant, use _sample_variant + _stream_variant_excluding instead.
     """
-    n = len(df)
-    out = np.empty(n, dtype=np.int64)
-    docs = _docs(df)
-    X = _matrix(df)
-    for start in range(0, n, chunk_size):
-        end = min(n, start + chunk_size)
-        topics_chunk, _probs = topic_model.transform(
-            documents=docs[start:end], embeddings=X[start:end]
-        )
-        out[start:end] = np.asarray(topics_chunk, dtype=np.int64)
-        print(f"        transformed {end:,} / {n:,}")
-    return out
+    variant_dir = emb_root / f"variant={variant}"
+    if not variant_dir.is_dir():
+        raise FileNotFoundError(f"No partition: {variant_dir}")
+    dset = pads.dataset(str(variant_dir), format="parquet")
+    cols = dset.schema.names
+    keep = ["id", "title_clean", "abstract_clean"]
+    keep = [c for c in keep if c in cols] + _embedding_columns(cols)
+    return dset.to_table(columns=keep).to_pandas()
+
+
+def _glob(emb_root: Path, variant: str) -> str:
+    return str(emb_root / f"variant={variant}" / "**" / "*.parquet")
+
+
+def _sample_variant(emb_root: Path, variant: str,
+                    n_sample: int, seed: int) -> pd.DataFrame:
+    """
+    Random sample of N rows from a variant via duckdb's RESERVOIR sampler.
+    Streams the input parquets without materialising the whole variant.
+    Reproducible given (n_sample, seed).
+    """
+    import duckdb
+    con = duckdb.connect()
+    try:
+        df = con.execute(f"""
+            SELECT *
+            FROM read_parquet('{_glob(emb_root, variant)}', hive_partitioning = false)
+            USING SAMPLE {int(n_sample)} ROWS (RESERVOIR, {int(seed)})
+        """).df()
+    finally:
+        con.close()
+    return df
+
+
+def _stream_variant_excluding(emb_root: Path, variant: str,
+                              exclude_ids,
+                              chunk_rows: int = 50_000):
+    """
+    Yield DataFrames in chunks of ~`chunk_rows`: all rows from `variant`
+    whose id is NOT in `exclude_ids`. Streams via duckdb anti-join — never
+    materialises the whole variant in memory.
+    """
+    import duckdb
+    con = duckdb.connect()
+    try:
+        excl_df = pd.DataFrame({"id": list(exclude_ids)} if exclude_ids
+                               else {"id": pd.Series([], dtype=object)})
+        con.register("excl", excl_df)
+        res = con.execute(f"""
+            SELECT *
+            FROM read_parquet('{_glob(emb_root, variant)}', hive_partitioning = false) AS p
+            WHERE p.id NOT IN (SELECT id FROM excl)
+        """)
+        while True:
+            chunk = res.fetch_df_chunk()
+            if chunk is None or len(chunk) == 0:
+                break
+            yield chunk
+    finally:
+        con.close()
+
+
+def _stream_variant_minus_primary(emb_root: Path,
+                                  fallback_variant: str,
+                                  primary_variant: str,
+                                  chunk_rows: int = 50_000):
+    """
+    Yield DataFrames in chunks of ~`chunk_rows`: rows in `fallback_variant`
+    whose id is NOT in `primary_variant`. duckdb anti-join, streamed.
+    """
+    import duckdb
+    con = duckdb.connect()
+    try:
+        res = con.execute(f"""
+            SELECT *
+            FROM read_parquet('{_glob(emb_root, fallback_variant)}', hive_partitioning = false) AS f
+            WHERE f.id NOT IN (
+              SELECT id FROM read_parquet('{_glob(emb_root, primary_variant)}', hive_partitioning = false)
+            )
+        """)
+        while True:
+            chunk = res.fetch_df_chunk()
+            if chunk is None or len(chunk) == 0:
+                break
+            yield chunk
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +179,8 @@ def main() -> int:
     p.add_argument("--corpus-emb-dir",    required=True)
     p.add_argument("--reference-emb-dir", required=True)
     p.add_argument("--output-dir",        required=True)
-    p.add_argument("--bertopic-cfg-yaml", required=True,
-                   help="YAML with one config (the BERTopic params), not the full project config")
-    p.add_argument("--run-name",          required=True,
-                   help="Name of the BERTopic config; becomes the bertopic=<...> path component")
+    p.add_argument("--bertopic-cfg-yaml", required=True)
+    p.add_argument("--run-name",          required=True)
     args = p.parse_args()
 
     corpus_root = Path(args.corpus_emb_dir).resolve()
@@ -147,33 +209,24 @@ def main() -> int:
     print(f"[info] primary     = {primary}    fallback = {fallback}")
     print(f"[info] sample_size = {sample_size:,}    seed = {seed}")
 
-    # ---------- 1. Load primary variant: full corpus + all keypapers --------
-    print("[step] reading primary variant for corpus + keypapers")
-    df_corpus_p = _read_source_variant(corpus_root, primary)
-    df_ref_p    = _read_source_variant(refer_root,  primary)
-    df_corpus_p["source"] = "corpus"
-    df_ref_p["source"]    = "keypaper"
-    print(f"        corpus={len(df_corpus_p):,}  keypaper={len(df_ref_p):,}")
+    # ---------- 1. Load keypapers (small) -----------------------------------
+    print("[step] loading keypapers primary variant")
+    df_ref_p = _read_full_variant(refer_root, primary)
+    df_ref_p["source"] = "keypaper"
+    print(f"        keypapers: {len(df_ref_p):,}")
 
-    # ---------- 2. Stratified sample (random corpus + ALL keypapers) -------
-    # All keypapers anchor the relevant clusters; a random N from corpus
-    # covers the rest of the embedding space well enough at large N. We
-    # rely on randomness rather than score-based stratification so this
-    # script has no dependency on the scoring stage.
-    if sample_size >= len(df_corpus_p):
-        df_corpus_fit = df_corpus_p
-        print(f"        sample_size >= corpus_size; fitting on all {len(df_corpus_p):,} corpus rows")
-    else:
-        df_corpus_fit = df_corpus_p.sample(
-            n=sample_size, random_state=seed, replace=False
-        ).reset_index(drop=True)
-        print(f"        fitting on {len(df_corpus_fit):,} corpus rows + {len(df_ref_p):,} keypapers")
-    df_fit = pd.concat([df_corpus_fit, df_ref_p], ignore_index=True)
+    # ---------- 2. Sample corpus primary via duckdb (streamed) -------------
+    print(f"[step] sampling {sample_size:,} corpus rows from variant={primary}")
+    df_corpus_sample = _sample_variant(corpus_root, primary, sample_size, seed)
+    df_corpus_sample["source"] = "corpus"
+    print(f"        corpus sample: {len(df_corpus_sample):,}")
+    sample_ids = set(df_corpus_sample["id"].astype(str).tolist())
 
-    X_fit    = _matrix(df_fit)
-    docs_fit = _docs(df_fit)
+    # ---------- 3. Fit BERTopic on (sample + keypapers) --------------------
+    df_fit   = pd.concat([df_corpus_sample, df_ref_p], ignore_index=True)
+    X_fit    = _matrix_from_df(df_fit)
+    docs_fit = _docs_from_df(df_fit)
 
-    # ---------- 3. Build UMAP + HDBSCAN + BERTopic on the sample -----------
     print("[step] fitting UMAP + HDBSCAN + c-TF-IDF (BERTopic) on sample")
     from bertopic import BERTopic
     from umap import UMAP
@@ -192,7 +245,7 @@ def main() -> int:
         min_samples=int(cl.get("hdbscan_min_samples", 50)),
         metric="euclidean",
         cluster_selection_method="eom",
-        prediction_data=True,            # required for approximate_predict()
+        prediction_data=True,
     )
     vectorizer = CountVectorizer(
         stop_words="english",
@@ -203,7 +256,7 @@ def main() -> int:
     )
 
     topic_model = BERTopic(
-        embedding_model=None,            # embeddings supplied directly
+        embedding_model=None,
         umap_model=umap_model,
         hdbscan_model=hdbscan_model,
         vectorizer_model=vectorizer,
@@ -213,52 +266,70 @@ def main() -> int:
     )
 
     topics_fit, _probs_fit = topic_model.fit_transform(docs_fit, embeddings=X_fit)
-    df_fit["topic_id"]     = topics_fit
+    df_fit["topic_id"]     = np.asarray(topics_fit, dtype=np.int64)
     df_fit["topic_source"] = "embedding"
     df_fit["probability"]  = np.nan
 
-    # ---------- 4. Transfer the REST of the corpus (primary variant) -------
-    fit_ids = set(df_corpus_fit["id"])
-    df_corpus_rest = df_corpus_p[~df_corpus_p["id"].isin(fit_ids)].reset_index(drop=True)
-    print(f"[step] transferring {len(df_corpus_rest):,} non-sampled corpus rows (primary)")
-    if len(df_corpus_rest):
-        topics_rest = _chunked_transform(topic_model, df_corpus_rest)
-        df_corpus_rest["topic_id"]     = topics_rest
-        df_corpus_rest["topic_source"] = "transferred"
-        df_corpus_rest["source"]       = "corpus"
-        df_corpus_rest["probability"]  = np.nan
-    else:
-        df_corpus_rest = df_corpus_rest.assign(
-            topic_id=pd.Series(dtype=np.int64),
-            topic_source=pd.Series(dtype=str),
-            probability=pd.Series(dtype=float),
-        )
+    # Free the large fit-time matrix; keep only the small assignments df.
+    del X_fit, docs_fit, df_corpus_sample
+    fit_assignments = df_fit[["id", "source", "topic_id", "topic_source", "probability"]].copy()
+    del df_fit
 
-    # ---------- 5. Fallback variant: corpus works without primary ----------
-    df_fb_assignments = pd.DataFrame(columns=["id", "source", "topic_id", "topic_source", "probability"])
+    # ---------- 4. Stream the rest of corpus primary, transform per chunk --
+    print("[step] transferring remaining corpus primary rows (streamed)")
+    rest_chunks = []
+    n_done = 0
+    for chunk in _stream_variant_excluding(
+        corpus_root, primary, sample_ids, chunk_rows=50_000
+    ):
+        topics_chunk, _probs = topic_model.transform(
+            documents=_docs_from_df(chunk),
+            embeddings=_matrix_from_df(chunk),
+        )
+        rest_chunks.append(pd.DataFrame({
+            "id":           chunk["id"].astype(str).values,
+            "source":       "corpus",
+            "topic_id":     np.asarray(topics_chunk, dtype=np.int64),
+            "topic_source": "transferred",
+            "probability":  np.nan,
+        }))
+        n_done += len(chunk)
+        print(f"        transferred {n_done:,}")
+        del chunk
+    df_rest = (pd.concat(rest_chunks, ignore_index=True)
+               if rest_chunks else
+               pd.DataFrame(columns=fit_assignments.columns))
+    del rest_chunks
+
+    # ---------- 5. Fallback variant (rows present only in fallback) --------
+    df_fb = pd.DataFrame(columns=fit_assignments.columns)
     if fallback:
-        print(f"[step] reading fallback variant ({fallback}) for corpus")
-        df_corpus_fb = _read_source_variant(corpus_root, fallback)
-        already = set(df_corpus_p["id"])           # works that DID have primary
-        df_corpus_fb = df_corpus_fb[~df_corpus_fb["id"].isin(already)].reset_index(drop=True)
-        print(f"        no-primary corpus works to transfer via fallback: {len(df_corpus_fb):,}")
-        if len(df_corpus_fb):
-            topics_fb = _chunked_transform(topic_model, df_corpus_fb)
-            df_corpus_fb["topic_id"]     = topics_fb
-            df_corpus_fb["topic_source"] = "fallback"
-            df_corpus_fb["source"]       = "corpus"
-            df_corpus_fb["probability"]  = np.nan
-            df_fb_assignments = df_corpus_fb[["id", "source", "topic_id", "topic_source", "probability"]]
+        print(f"[step] processing fallback variant ({fallback}) for no-primary works")
+        fb_chunks = []
+        n_done = 0
+        for chunk in _stream_variant_minus_primary(
+            corpus_root, fallback, primary, chunk_rows=50_000
+        ):
+            topics_chunk, _probs = topic_model.transform(
+                documents=_docs_from_df(chunk),
+                embeddings=_matrix_from_df(chunk),
+            )
+            fb_chunks.append(pd.DataFrame({
+                "id":           chunk["id"].astype(str).values,
+                "source":       "corpus",
+                "topic_id":     np.asarray(topics_chunk, dtype=np.int64),
+                "topic_source": "fallback",
+                "probability":  np.nan,
+            }))
+            n_done += len(chunk)
+            print(f"        fallback {n_done:,}")
+            del chunk
+        if fb_chunks:
+            df_fb = pd.concat(fb_chunks, ignore_index=True)
+        del fb_chunks
 
     # ---------- 6. Combine all assignments ---------------------------------
-    out_topics = pd.concat(
-        [
-            df_fit[["id", "source", "topic_id", "topic_source", "probability"]],
-            df_corpus_rest[["id", "source", "topic_id", "topic_source", "probability"]],
-            df_fb_assignments,
-        ],
-        ignore_index=True,
-    )
+    out_topics = pd.concat([fit_assignments, df_rest, df_fb], ignore_index=True)
     out_topics["topic_id"] = out_topics["topic_id"].astype(np.int64)
 
     # ---------- 7. Build topic_info + topic_words --------------------------

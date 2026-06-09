@@ -49,11 +49,33 @@ run_bertopic_local <- function(
   marker_path     <- file.path(leaf_dir, ".topics_complete")
 
   # ---- skip-guard -------------------------------------------------------
+  # Cfg-aware: skip only if the prior run was driven by an IDENTICAL cfg.
+  # The marker stores a hash of the cfg used; if the cfg changes (e.g. you
+  # bumped hdbscan_min_cluster_size), the hash mismatches and we re-run.
+  # The Python script overwrites the three output parquets, so we don't
+  # need to wipe the leaf first.
+  current_cfg_hash <- .topics_cfg_hash(cfg)
   if (file.exists(marker_path) && file.exists(topic_info_path)) {
-    message(sprintf(
-      "[bertopic_local|%s] leaf already complete — skipping run.", run_name
-    ))
-    return(topic_info_path)
+    marker <- read_topics_marker(leaf_dir)
+    if (!is.na(marker$cfg_hash) &&
+        identical(marker$cfg_hash, current_cfg_hash)) {
+      message(sprintf(
+        "[bertopic_local|%s] leaf already complete with matching cfg — skipping run.",
+        run_name
+      ))
+      return(topic_info_path)
+    }
+    if (is.na(marker$cfg_hash)) {
+      message(sprintf(
+        "[bertopic_local|%s] marker has no cfg hash (older format) — re-running to refresh.",
+        run_name
+      ))
+    } else {
+      message(sprintf(
+        "[bertopic_local|%s] cfg changed since last run (hash %s -> %s) — re-running.",
+        run_name, substr(marker$cfg_hash, 1, 8), substr(current_cfg_hash, 1, 8)
+      ))
+    }
   }
 
   # ---- locate the project venv -----------------------------------------
@@ -97,15 +119,23 @@ run_bertopic_local <- function(
     stop("Expected outputs missing in ", leaf_dir, ": ",
          paste(missing, collapse = ", "))
   }
-  write_topics_marker(leaf_dir, run_name)
+  write_topics_marker(leaf_dir, run_name, current_cfg_hash)
 
   topic_info_path
 }
 
 # ----------------------------------------------------------------------------
 # Marker helpers (parallel to embed_works.R's write_embed_marker /
-# read_embed_marker). Skip-guard fires on presence, not on a row-count match,
-# because BERTopic outputs are small and easy to recompute if needed.
+# read_embed_marker). Marker file is three lines:
+#
+#     <run_name>
+#     <UTC timestamp>
+#     <cfg_hash>          # xxhash64 of the bertopic cfg list
+#
+# Skip-guard fires only when the stored cfg_hash matches the current cfg's
+# hash — so a config change invalidates the cached result automatically.
+# Older 2-line markers (no cfg_hash) return NA and force a refresh on
+# next invocation.
 # ----------------------------------------------------------------------------
 topics_marker_path <- function(leaf_dir) {
   file.path(leaf_dir, ".topics_complete")
@@ -113,16 +143,39 @@ topics_marker_path <- function(leaf_dir) {
 
 read_topics_marker <- function(leaf_dir) {
   p <- topics_marker_path(leaf_dir)
-  if (!file.exists(p)) return(NA_character_)
-  readLines(p, n = 1L, warn = FALSE)
+  if (!file.exists(p)) {
+    return(list(run_name = NA_character_, timestamp = NA_character_,
+                cfg_hash = NA_character_))
+  }
+  lines <- readLines(p, warn = FALSE)
+  list(
+    run_name  = if (length(lines) >= 1L) lines[1] else NA_character_,
+    timestamp = if (length(lines) >= 2L) lines[2] else NA_character_,
+    cfg_hash  = if (length(lines) >= 3L) lines[3] else NA_character_
+  )
 }
 
-write_topics_marker <- function(leaf_dir, run_name) {
+write_topics_marker <- function(leaf_dir, run_name, cfg_hash) {
   dir.create(leaf_dir, recursive = TRUE, showWarnings = FALSE)
   writeLines(
-    c(run_name, format(Sys.time(), tz = "UTC")),
+    c(run_name, format(Sys.time(), tz = "UTC"),
+      if (is.null(cfg_hash) || is.na(cfg_hash)) "" else cfg_hash),
     topics_marker_path(leaf_dir)
   )
+}
+
+# Stable hash of the bertopic cfg list, used by the skip-guard to detect
+# cfg-driven changes. Sorts keys for a canonical form so cosmetic re-ordering
+# in YAML doesn't trigger spurious re-runs. xxhash64 is fast and fine for
+# change detection (not a cryptographic guarantee).
+.topics_cfg_hash <- function(cfg) {
+  if (!is.list(cfg)) return(NA_character_)
+  if (!requireNamespace("digest", quietly = TRUE)) {
+    warning("Package `digest` not available; skip-guard cfg comparison disabled.")
+    return(NA_character_)
+  }
+  cfg_sorted <- cfg[order(names(cfg))]
+  digest::digest(cfg_sorted, algo = "xxhash64")
 }
 
 # Local null-coalescing for use inside the function above. Kept private; the

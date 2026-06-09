@@ -65,11 +65,32 @@ run_bertopic_runpod <- function(
   dir.create(leaf_dir, recursive = TRUE, showWarnings = FALSE)
 
   # ---- skip-guard -------------------------------------------------------
+  # Cfg-aware (see run_bertopic_local.R for rationale). Skip only when the
+  # marker's stored cfg_hash matches the current cfg's hash — so changing
+  # bertopic params (or SSH details, since they're part of cfg) re-runs the
+  # job automatically.
+  current_cfg_hash <- .topics_cfg_hash(cfg)
   if (file.exists(marker_path) && file.exists(topic_info_path)) {
-    message(sprintf(
-      "[bertopic_runpod|%s] leaf already complete — skipping run.", run_name
-    ))
-    return(topic_info_path)
+    marker <- read_topics_marker(leaf_dir)
+    if (!is.na(marker$cfg_hash) &&
+        identical(marker$cfg_hash, current_cfg_hash)) {
+      message(sprintf(
+        "[bertopic_runpod|%s] leaf already complete with matching cfg — skipping run.",
+        run_name
+      ))
+      return(topic_info_path)
+    }
+    if (is.na(marker$cfg_hash)) {
+      message(sprintf(
+        "[bertopic_runpod|%s] marker has no cfg hash (older format) — re-running to refresh.",
+        run_name
+      ))
+    } else {
+      message(sprintf(
+        "[bertopic_runpod|%s] cfg changed since last run (hash %s -> %s) — re-running.",
+        run_name, substr(marker$cfg_hash, 1, 8), substr(current_cfg_hash, 1, 8)
+      ))
+    }
   }
 
   # ---- SSH command builders (use openssh client) ----------------------
@@ -192,7 +213,7 @@ run_bertopic_runpod <- function(
     stop("Expected outputs missing in local leaf ", leaf_dir, ": ",
          paste(missing, collapse = ", "))
   }
-  write_topics_marker(leaf_dir, run_name)
+  write_topics_marker(leaf_dir, run_name, current_cfg_hash)
 
   topic_info_path
 }

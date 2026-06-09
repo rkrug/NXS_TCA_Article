@@ -73,17 +73,17 @@ bertopic:
       method: local
       sample_size: 200000              # rows to fit BERTopic on; transfer the rest
       umap_n_components: 5
-      umap_n_neighbors:  30
+      umap_n_neighbors:  15
       umap_min_dist:     0.0
       umap_metric:       cosine
-      hdbscan_min_cluster_size: 200
-      hdbscan_min_samples:      50
+      hdbscan_min_cluster_size: 15
+      hdbscan_min_samples:      3
       top_n_words:        15
-      keypaper_threshold:  5
+      keypaper_threshold:  3
       primary_variant:    title_abstract
       fallback_variant:   title
-      vectorizer_min_df:        10
-      vectorizer_max_df:        0.5
+      vectorizer_min_df:        2
+      vectorizer_max_df:        0.95
       vectorizer_max_features:  20000
       vectorizer_ngram:        [1, 2]
       random_seed: 13

@@ -273,31 +273,91 @@ list(
     format = "file"
   ),
 
-  # Track config.yaml as a file dep, then expose only the `clustering:` block
-  # as a separate target. Downstream BERTopic targets depend on this subset,
-  # so changes to unrelated config sections (workers, embedding params) do
-  # NOT invalidate topics_tcac20, but any edit to `clustering:` does.
+  # Track config.yaml as a file dep, then expose individual bertopic configs
+  # so each named run becomes its own DAG node. Downstream targets depend on
+  # the subset of the config they care about, so changes to unrelated
+  # sections (workers, embedding params) do not invalidate them.
   tar_target(config_file, "config.yaml", format = "file"),
   tar_target(
-    clustering_cfg,
-    yaml::read_yaml(config_file)$clustering
+    bertopic_local_cfg,
+    {
+      b <- yaml::read_yaml(config_file)$bertopic
+      cfg <- b$configs[[b$active_local]]
+      if (is.null(cfg)) {
+        stop("bertopic.active_local '", b$active_local,
+             "' not found under bertopic.configs in config.yaml")
+      }
+      cfg
+    }
+  ),
+  tar_target(
+    bertopic_runpod_cfg,
+    {
+      b <- yaml::read_yaml(config_file)$bertopic
+      cfg <- b$configs[[b$active_runpod]]
+      if (is.null(cfg)) {
+        stop("bertopic.active_runpod '", b$active_runpod,
+             "' not found under bertopic.configs in config.yaml")
+      }
+      cfg
+    }
   ),
 
-  # BERTopic clustering. corpus_emb_dir / reference_emb_dir resolve to the
-  # source-level dir via dirname() of the primary variant target; the python
-  # script discovers variant=… partitions inside. fallback_* args are passed
-  # so the fallback variant targets are also DAG dependencies.
+  # Path A — local CPU sample-fit + transfer. Self-contained on the laptop.
+  # corpus_emb_dir / reference_emb_dir resolve to the source-level dir via
+  # dirname() of the primary variant target; the Python script discovers
+  # variant=… partitions inside. fallback_* args are dep tokens so the
+  # fallback variant targets are also DAG dependencies.
+  tar_target(
+    topics_tcac20_local,
+    run_bertopic_local(
+      corpus_emb_dir    = dirname(emb_tcac20_title_abstract),
+      reference_emb_dir = dirname(emb_keypapers_title_abstract),
+      out_dir           = "output/TCAC_2.0/topics",
+      cfg               = bertopic_local_cfg,
+      run_name          = yaml::read_yaml(config_file)$bertopic$active_local,
+      fallback_corpus   = emb_tcac20_title,
+      fallback_ref      = emb_keypapers_title
+    ),
+    format = "file"
+  ),
+
+  # Path B — RunPod GPU full-fit via cuml. SSH/rsync orchestrated by the
+  # R wrapper; needs a pod up from the docker/bertopic-runpod image.
+  tar_target(
+    topics_tcac20_runpod,
+    run_bertopic_runpod(
+      corpus_emb_dir    = dirname(emb_tcac20_title_abstract),
+      reference_emb_dir = dirname(emb_keypapers_title_abstract),
+      out_dir           = "output/TCAC_2.0/topics",
+      cfg               = bertopic_runpod_cfg,
+      run_name          = yaml::read_yaml(config_file)$bertopic$active_runpod,
+      fallback_corpus   = emb_tcac20_title,
+      fallback_ref      = emb_keypapers_title
+    ),
+    format = "file"
+  ),
+
+  # Alias for the viz layer so existing viz_topics_* targets don't need
+  # rewiring. Reads bertopic.active_for_viz to pick which run feeds the
+  # report. Side-by-side comparison viz is future work.
   tar_target(
     topics_tcac20,
-    run_bertopic(
-      corpus_emb_dir = dirname(emb_tcac20_title_abstract),
-      reference_emb_dir = dirname(emb_keypapers_title_abstract),
-      out_dir = "output/TCAC_2.0/topics",
-      cfg_path = "config.yaml",
-      clustering_cfg = clustering_cfg,
-      fallback_corpus = emb_tcac20_title,
-      fallback_ref = emb_keypapers_title
-    ),
+    {
+      b    <- yaml::read_yaml(config_file)$bertopic
+      pick <- b$active_for_viz
+      if (pick == b$active_local) {
+        topics_tcac20_local
+      } else if (pick == b$active_runpod) {
+        topics_tcac20_runpod
+      } else {
+        stop(
+          "bertopic.active_for_viz ('", pick,
+          "') must equal bertopic.active_local ('", b$active_local,
+          "') or bertopic.active_runpod ('", b$active_runpod, "')."
+        )
+      }
+    },
     format = "file"
   ),
 
