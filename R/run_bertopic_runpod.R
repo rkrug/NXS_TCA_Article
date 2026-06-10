@@ -1,20 +1,24 @@
-# RunPod-mode BERTopic wrapper.
+# RunPod-mode BERTopic wrapper (Phase 1 — embeddings in R2).
 #
 # Orchestrates a one-shot BERTopic job on a remote RunPod pod built from the
-# docker/bertopic-runpod/ image. Steps, all over SSH:
-#   1. Skip-guard on local leaf — if .topics_complete exists, return.
+# docker/bertopic-runpod/ image. The pod reads embeddings *directly from
+# Cloudflare R2* via duckdb httpfs — no 32 GB rsync upload from the laptop.
+# Only the small per-run cfg yaml goes up the wire, and only the small
+# result parquets come back.
+#
+# Steps:
+#   1. Skip-guard on local leaf — if .topics_complete exists and cfg hash
+#      matches, return.
 #   2. Validate SSH connectivity.
-#   3. rsync the primary variant + fallback variant + keypaper variants up to
-#      cfg$remote_workdir. rsync allows resume if a previous attempt died
-#      mid-upload (~32 GB takes ~50 min on RunPod's network at ~10 MB/s).
-#   4. Write a single-config YAML and scp it.
-#   5. ssh + invoke /opt/run_bertopic_gpu.py on the pod.
-#   6. scp the three result parquets back into the local leaf.
+#   3. Translate local emb dirs -> s3:// URIs using cfg$r2.
+#   4. Write a single-config YAML (no secrets) and rsync it to the pod.
+#   5. ssh + invoke /opt/run_bertopic_gpu.py on the pod with the s3 URIs.
+#   6. rsync the three result parquets back into the local leaf.
 #   7. Stamp .topics_complete locally.
 #
 # Designed for migration into openalexVectorComp: signature matches
 # run_bertopic_local(), no private deps from this repo, configuration purely
-# via the `cfg` list.
+# via the `cfg` list (incl. cfg$r2 sub-list for endpoint/bucket/prefix).
 
 run_bertopic_runpod <- function(
   corpus_emb_dir,
@@ -38,6 +42,15 @@ run_bertopic_runpod <- function(
       "`cfg` is missing SSH transport fields: ",
       paste(missing_ssh, collapse = ", "),
       ". See docker/bertopic-runpod/README.md."
+    )
+  }
+  required_r2 <- c("endpoint", "bucket", "embeddings_local_root",
+                   "embeddings_remote_prefix")
+  missing_r2  <- setdiff(required_r2, names(cfg$r2 %||% list()))
+  if (length(missing_r2)) {
+    stop(
+      "`cfg$r2` is missing fields: ", paste(missing_r2, collapse = ", "),
+      ". Add the r2: block in config.yaml — see cloud_storage_migration.md."
     )
   }
 
@@ -112,9 +125,13 @@ run_bertopic_runpod <- function(
 
   # rsync is preferred over scp for resumability + parallel transfer of
   # many small parquet files.
+  # -rltD instead of -a: skip -o/-g (chown/chgrp), -p (perms). RunPod's
+  # volume mount disallows chown by container root, which makes -a exit
+  # non-zero even on successful transfer. We don't need ownership/perm
+  # preservation — the pod runs as root, files only need to be readable.
   rsync_to_pod <- function(local_path, remote_path) {
     args <- c(
-      "-az", "--info=progress2",
+      "-rltD", "-z", "--progress",
       "-e", shQuote(sprintf("ssh -i %s -p %d -o StrictHostKeyChecking=accept-new",
                             ssh_key, ssh_port)),
       shQuote(local_path),
@@ -124,7 +141,7 @@ run_bertopic_runpod <- function(
   }
   rsync_from_pod <- function(remote_path, local_path) {
     args <- c(
-      "-az", "--info=progress2",
+      "-rltD", "-z", "--progress",
       "-e", shQuote(sprintf("ssh -i %s -p %d -o StrictHostKeyChecking=accept-new",
                             ssh_key, ssh_port)),
       shQuote(sprintf("%s:%s", ssh_target, remote_path)),
@@ -138,64 +155,65 @@ run_bertopic_runpod <- function(
                   run_name, ssh_target))
   ssh_cmd("true")   # errors out if connection / auth fails
 
-  # ---- 2. Prepare remote workdir ---------------------------------------
-  remote_root  <- cfg$remote_workdir
-  remote_in    <- file.path(remote_root, "in",  paste0("config=", config_name))
-  remote_corp  <- file.path(remote_in, "source=corpus")
-  remote_ref   <- file.path(remote_in, "source=keypaper")
-  remote_out   <- file.path(remote_root, "out")
-  remote_cfg   <- file.path(remote_root, sprintf("bertopic_cfg_%s.yaml", run_name))
-  ssh_cmd(sprintf(
-    "mkdir -p %s %s %s",
-    shQuote(remote_corp), shQuote(remote_ref), shQuote(remote_out)
-  ))
-  ssh_cmd(sprintf("touch %s/.heartbeat",
-                  shQuote(remote_root)))
-
-  # ---- 3. Upload required variants -------------------------------------
-  variants_to_upload <- unique(c(primary, fallback))
-  variants_to_upload <- variants_to_upload[!is.na(variants_to_upload) &
-                                             nzchar(variants_to_upload)]
-  for (v in variants_to_upload) {
-    local_corp_v <- file.path(corpus_emb_dir,    paste0("variant=", v))
-    local_ref_v  <- file.path(reference_emb_dir, paste0("variant=", v))
-    if (dir.exists(local_corp_v)) {
-      message(sprintf("[bertopic_runpod|%s] uploading corpus/variant=%s …",
-                      run_name, v))
-      ssh_cmd(sprintf("mkdir -p %s", shQuote(file.path(remote_corp, paste0("variant=", v)))))
-      rsync_to_pod(paste0(local_corp_v, "/"),
-                   paste0(file.path(remote_corp, paste0("variant=", v)), "/"))
+  # ---- 2. Translate local emb dirs -> s3:// URIs -----------------------
+  # Targets passes corpus_emb_dir as a local filesystem path under
+  # `embeddings_local_root` (e.g. .../embeddings/config=SPECTER2_runpod/
+  # source=corpus). We translate to the matching R2 prefix; the pod reads
+  # parquets from there via duckdb httpfs.
+  local_root <- normalizePath(cfg$r2$embeddings_local_root,
+                              mustWork = TRUE, winslash = "/")
+  to_s3 <- function(local_path) {
+    abs_local <- normalizePath(local_path, mustWork = TRUE, winslash = "/")
+    if (!startsWith(abs_local, local_root)) {
+      stop("emb path ", abs_local,
+           " is not under r2.embeddings_local_root ", local_root)
     }
-    if (dir.exists(local_ref_v)) {
-      message(sprintf("[bertopic_runpod|%s] uploading keypaper/variant=%s …",
-                      run_name, v))
-      ssh_cmd(sprintf("mkdir -p %s", shQuote(file.path(remote_ref, paste0("variant=", v)))))
-      rsync_to_pod(paste0(local_ref_v, "/"),
-                   paste0(file.path(remote_ref, paste0("variant=", v)), "/"))
-    }
+    rel <- sub(paste0("^", gsub("([][.|()*+?^$\\\\])", "\\\\\\1", local_root),
+                      "/?"), "", abs_local)
+    sprintf("s3://%s/%s/%s",
+            cfg$r2$bucket, cfg$r2$embeddings_remote_prefix, rel)
   }
+  s3_corpus_dir <- to_s3(corpus_emb_dir)
+  s3_ref_dir    <- to_s3(reference_emb_dir)
+  message(sprintf("[bertopic_runpod|%s] corpus    -> %s", run_name, s3_corpus_dir))
+  message(sprintf("[bertopic_runpod|%s] reference -> %s", run_name, s3_ref_dir))
 
-  # ---- 4. Push the per-run cfg yaml ------------------------------------
+  # ---- 3. Prepare remote workdir (only out + cfg, no input upload) -----
+  remote_root <- cfg$remote_workdir
+  remote_out  <- file.path(remote_root, "out")
+  remote_cfg  <- file.path(remote_root, sprintf("bertopic_cfg_%s.yaml", run_name))
+  ssh_cmd(sprintf("mkdir -p %s && touch %s/.heartbeat",
+                  shQuote(remote_out), shQuote(remote_root)))
+
+  # ---- 4. Push the per-run cfg yaml (no secrets — pod has them in env) -
+  # Strip cfg$r2's keyring entry names; the pod doesn't use them. Endpoint,
+  # bucket, region stay so the Python script can configure duckdb httpfs.
+  cfg_for_pod      <- cfg
+  cfg_for_pod$r2   <- cfg$r2[c("endpoint", "bucket", "region")]
   cfg_local <- tempfile(pattern = "bertopic_cfg_", fileext = ".yaml")
   on.exit(unlink(cfg_local), add = TRUE)
-  yaml::write_yaml(cfg, cfg_local)
+  yaml::write_yaml(cfg_for_pod, cfg_local)
   rsync_to_pod(cfg_local, remote_cfg)
 
-  # ---- 5. Trigger the GPU script on the pod ----------------------------
+  # ---- 6. Trigger the GPU script on the pod ----------------------------
+  # R2 credentials come from RunPod Secrets set on the pod template
+  # (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY). The wrapper does NOT pass
+  # them — they live encrypted at rest on RunPod's side and are exposed
+  # to the pod as env vars at boot.
   remote_cmd <- sprintf(
     "set -euo pipefail; touch %s/.heartbeat; python /opt/run_bertopic_gpu.py %s %s %s %s %s",
     shQuote(remote_root),
-    sprintf("--corpus-emb-dir %s",    shQuote(remote_corp)),
-    sprintf("--reference-emb-dir %s", shQuote(remote_ref)),
+    sprintf("--corpus-emb-dir %s",    shQuote(s3_corpus_dir)),
+    sprintf("--reference-emb-dir %s", shQuote(s3_ref_dir)),
     sprintf("--output-dir %s",        shQuote(remote_out)),
     sprintf("--bertopic-cfg-yaml %s", shQuote(remote_cfg)),
     sprintf("--run-name %s",          shQuote(run_name))
   )
-  message(sprintf("[bertopic_runpod|%s] running GPU script on the pod (may take 1–4 h)",
+  message(sprintf("[bertopic_runpod|%s] running GPU script on the pod (may take 1–3 h)",
                   run_name))
   ssh_cmd(remote_cmd)
 
-  # ---- 6. Download results --------------------------------------------
+  # ---- 7. Download results --------------------------------------------
   remote_leaf <- file.path(
     remote_out,
     paste0("config=",   config_name),
@@ -206,7 +224,7 @@ run_bertopic_runpod <- function(
   rsync_from_pod(paste0(remote_leaf, "/"),
                  paste0(leaf_dir, "/"))
 
-  # ---- 7. Validate + stamp marker -------------------------------------
+  # ---- 8. Validate + stamp marker -------------------------------------
   expected <- c("topic_info.parquet", "topics.parquet", "topic_words.parquet")
   missing  <- expected[!file.exists(file.path(leaf_dir, expected))]
   if (length(missing)) {

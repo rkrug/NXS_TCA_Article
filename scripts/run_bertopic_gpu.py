@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-BERTopic clustering — GPU full-corpus mode (cuml).
+BERTopic clustering — GPU full-corpus mode (cuml), memory-conscious.
 
 Runs INSIDE a RunPod pod from the bertopic-runpod image. Uses cuml's
-UMAP + HDBSCAN so the full 5+M-row corpus fits comfortably in the GPU's
-VRAM and finishes in minutes-to-hours rather than days.
+UMAP + HDBSCAN so the full 5+M-row corpus fits in VRAM and finishes in
+minutes-to-hours rather than days.
 
-Same I/O contract as run_bertopic_local.py — three parquets + the
-hive-partitioned leaf layout — so downstream R-side code is identical
-between paths.
+Phase 1: embedding inputs live in Cloudflare R2 (S3-compatible). All
+reads go through duckdb httpfs — no local parquet files on the pod. The
+primary variant is materialised once into pandas (cuml.UMAP needs the
+full matrix); the fallback variant is streamed via duckdb anti-join in
+50K-row chunks.
 
-Inputs:
+Inputs (paths may be local OR `s3://bucket/prefix/...`):
     --corpus-emb-dir    .../config=<X>/source=corpus
     --reference-emb-dir .../config=<X>/source=keypaper
     --output-dir        .../topics
     --bertopic-cfg-yaml /tmp/bertopic_cfg.yaml
     --run-name          default_runpod
+
+S3/R2 credentials come from env vars (set in the RunPod template):
+    R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+Endpoint + region come from the cfg yaml's r2: block (no secrets).
 
 Output:
     <output_dir>/config=<X>/bertopic=<run_name>/variant=<primary>/
@@ -27,19 +33,21 @@ Self-contained — drop into openalexVectorComp/inst/scripts/ later.
 from __future__ import annotations
 
 import argparse
+import gc
+import os
 import sys
 import time
 from pathlib import Path
 
+import duckdb
 import numpy as np
 import pandas as pd
-import pyarrow.dataset as ds
 import yaml
 
 
 # Heartbeat path that the idle watchdog watches. Touched at start + every
-# minute while compute is running, so an idle pod (no script) can be
-# auto-stopped without killing an actively-running BERTopic job.
+# step, so an idle pod (no script) can be auto-stopped without killing an
+# actively-running BERTopic job.
 HEARTBEAT_PATH = Path("/work/.heartbeat")
 
 
@@ -52,7 +60,7 @@ def _heartbeat():
 
 
 # ---------------------------------------------------------------------------
-# Helpers (identical to run_bertopic_local.py — kept inline for self-contained)
+# Schema helpers (shared with run_bertopic_local.py)
 # ---------------------------------------------------------------------------
 
 def _embedding_columns(table_columns):
@@ -60,22 +68,12 @@ def _embedding_columns(table_columns):
     return sorted(ev, key=lambda c: int(c[1:]))
 
 
-def _read_source_variant(emb_root: Path, variant: str) -> pd.DataFrame:
-    variant_dir = emb_root / f"variant={variant}"
-    if not variant_dir.is_dir():
-        raise FileNotFoundError(f"No partition: {variant_dir}")
-    dset = ds.dataset(str(variant_dir), format="parquet")
-    cols = dset.schema.names
-    keep = ["id", "title_clean", "abstract_clean"]
-    keep = [c for c in keep if c in cols] + _embedding_columns(cols)
-    return dset.to_table(columns=keep).to_pandas()
+def _matrix_from_df(df: pd.DataFrame) -> np.ndarray:
+    cols = _embedding_columns(df.columns)
+    return df[cols].to_numpy(dtype=np.float32)
 
 
-def _matrix(df: pd.DataFrame) -> np.ndarray:
-    return df[_embedding_columns(df.columns)].to_numpy(dtype=np.float32)
-
-
-def _docs(df: pd.DataFrame) -> list[str]:
+def _docs_from_df(df: pd.DataFrame) -> list[str]:
     title = df.get("title_clean", pd.Series([""] * len(df))).fillna("")
     abstract = df.get("abstract_clean", pd.Series([""] * len(df))).fillna("")
     return (title.astype(str) + " " + abstract.astype(str)).tolist()
@@ -86,6 +84,94 @@ def _leaf_dir(out_root: Path, config_name: str, run_name: str,
     p = out_root / f"config={config_name}" / f"bertopic={run_name}" / f"variant={primary}"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _glob(emb_root: str, variant: str) -> str:
+    """Build a glob over parquet files for a variant.
+    emb_root may be a local path or an s3://bucket/prefix URI."""
+    root = emb_root.rstrip("/")
+    return f"{root}/variant={variant}/**/*.parquet"
+
+
+def _setup_duckdb_s3(con: duckdb.DuckDBPyConnection, r2_cfg: dict) -> None:
+    """Configure duckdb httpfs for R2. Idempotent — safe to call per query."""
+    endpoint = r2_cfg.get("endpoint")
+    if not endpoint:
+        return
+    key_id = os.environ.get("R2_ACCESS_KEY_ID")
+    secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    if not (key_id and secret):
+        raise SystemExit(
+            "R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY env vars must be set on "
+            "the pod (RunPod template — set as Secrets)."
+        )
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute(f"SET s3_region='{r2_cfg.get('region', 'auto')}'")
+    con.execute(f"SET s3_endpoint='{endpoint}'")
+    con.execute(f"SET s3_access_key_id='{key_id}'")
+    con.execute(f"SET s3_secret_access_key='{secret}'")
+    # R2 uses virtual-hosted-style by default; path style is the safe choice
+    # when the endpoint is the bare account host without bucket subdomain.
+    con.execute("SET s3_url_style='path'")
+    con.execute("SET s3_use_ssl=true")
+
+
+def _read_full_variant(emb_root: str, variant: str, r2_cfg: dict) -> pd.DataFrame:
+    """
+    Materialise an entire variant into pandas via duckdb. Used for the
+    primary variant (cuml.UMAP needs the full matrix in one shot) and for
+    keypapers (small). Works for local paths and s3:// URIs alike.
+    """
+    con = duckdb.connect()
+    try:
+        _setup_duckdb_s3(con, r2_cfg)
+        pattern = _glob(emb_root, variant)
+        # Probe the schema first so we keep only the columns we need.
+        schema_q = f"DESCRIBE SELECT * FROM read_parquet('{pattern}', hive_partitioning = false) LIMIT 0"
+        schema = con.execute(schema_q).fetchdf()
+        cols_all = schema["column_name"].tolist()
+        emb_cols = _embedding_columns(cols_all)
+        if not emb_cols:
+            raise RuntimeError(f"No embedding columns (V<int>) found at {pattern}")
+        keep = [c for c in ("id", "title_clean", "abstract_clean") if c in cols_all] + emb_cols
+        select_list = ", ".join(f'"{c}"' for c in keep)
+        df = con.execute(
+            f"SELECT {select_list} FROM read_parquet('{pattern}', hive_partitioning = false)"
+        ).fetchdf()
+        if df.empty:
+            raise FileNotFoundError(f"No rows at {pattern}")
+        return df
+    finally:
+        con.close()
+
+
+def _stream_variant_minus_primary(emb_root: str,
+                                  fallback_variant: str,
+                                  primary_variant: str,
+                                  r2_cfg: dict,
+                                  chunk_rows: int = 50_000):
+    """
+    Yield DataFrames in chunks of ~`chunk_rows`: rows in `fallback_variant`
+    whose id is NOT in `primary_variant`. duckdb anti-join, streamed — so
+    we never hold the full fallback dataset in RAM alongside the primary.
+    """
+    con = duckdb.connect()
+    try:
+        _setup_duckdb_s3(con, r2_cfg)
+        res = con.execute(f"""
+            SELECT *
+            FROM read_parquet('{_glob(emb_root, fallback_variant)}', hive_partitioning = false) AS f
+            WHERE f.id NOT IN (
+              SELECT id FROM read_parquet('{_glob(emb_root, primary_variant)}', hive_partitioning = false)
+            )
+        """)
+        while True:
+            chunk = res.fetch_df_chunk()
+            if chunk is None or len(chunk) == 0:
+                break
+            yield chunk
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -106,18 +192,29 @@ def main() -> int:
 
     _heartbeat()
 
-    corpus_root = Path(args.corpus_emb_dir).resolve()
-    refer_root  = Path(args.reference_emb_dir).resolve()
+    # Paths may be local or s3:// — keep them as strings, don't Path()-ify
+    # (Path mangles s3:// into s3:/).
+    def _is_s3(p: str) -> bool:
+        return p.startswith("s3://")
+
+    def _parent(p: str) -> str:
+        return p.rstrip("/").rsplit("/", 1)[0]
+
+    def _basename(p: str) -> str:
+        return p.rstrip("/").rsplit("/", 1)[-1]
+
+    corpus_root = args.corpus_emb_dir if _is_s3(args.corpus_emb_dir)    else str(Path(args.corpus_emb_dir).resolve())
+    refer_root  = args.reference_emb_dir if _is_s3(args.reference_emb_dir) else str(Path(args.reference_emb_dir).resolve())
     out_root    = Path(args.output_dir).resolve()
     cfg_path    = Path(args.bertopic_cfg_yaml).resolve()
     run_name    = args.run_name
 
-    if corpus_root.parent != refer_root.parent:
+    if _parent(corpus_root) != _parent(refer_root):
         sys.exit(
             "corpus and reference must share parent (config dir); got\n"
             f"  corpus:    {corpus_root}\n  reference: {refer_root}"
         )
-    config_name = corpus_root.parent.name.split("=", 1)[1]
+    config_name = _basename(_parent(corpus_root)).split("=", 1)[1]
 
     with cfg_path.open("r") as fh:
         cl = yaml.safe_load(fh)
@@ -125,23 +222,27 @@ def main() -> int:
     primary  = cl["primary_variant"]
     fallback = cl.get("fallback_variant")
     seed     = int(cl.get("random_seed", 13))
+    r2_cfg   = cl.get("r2", {}) or {}
 
     print(f"[info] config_name = {config_name}")
     print(f"[info] run_name    = {run_name}")
     print(f"[info] primary     = {primary}    fallback = {fallback}")
+    if r2_cfg.get("endpoint"):
+        print(f"[info] r2 endpoint = {r2_cfg['endpoint']}  bucket = {r2_cfg.get('bucket')}")
 
     # ---------- 1. Load primary variant: full corpus + all keypapers --------
     print("[step] reading primary variant for corpus + keypapers")
-    df_corpus_p = _read_source_variant(corpus_root, primary)
-    df_ref_p    = _read_source_variant(refer_root,  primary)
+    df_corpus_p = _read_full_variant(corpus_root, primary, r2_cfg)
+    df_ref_p    = _read_full_variant(refer_root,  primary, r2_cfg)
     df_corpus_p["source"] = "corpus"
     df_ref_p["source"]    = "keypaper"
     df_fit = pd.concat([df_corpus_p, df_ref_p], ignore_index=True)
-    print(f"        corpus={len(df_corpus_p):,}  keypaper={len(df_ref_p):,}  total={len(df_fit):,}")
+    del df_corpus_p   # ref'd into df_fit; release the copy
+    print(f"        total fit rows: {len(df_fit):,}  (keypapers: {len(df_ref_p):,})")
     _heartbeat()
 
-    X_fit    = _matrix(df_fit)
-    docs_fit = _docs(df_fit)
+    X_fit    = _matrix_from_df(df_fit)
+    docs_fit = _docs_from_df(df_fit)
 
     # ---------- 2. Build UMAP + HDBSCAN + BERTopic (cuml-backed) -----------
     print("[step] fitting cuml.UMAP + cuml.HDBSCAN + c-TF-IDF (BERTopic)")
@@ -158,7 +259,7 @@ def main() -> int:
         random_state=seed,
     )
     hdbscan_model = cumlHDBSCAN(
-        min_cluster_size=int(cl.get("hdbscan_min_cluster_size", 200)),
+        min_cluster_size=int(cl.get("hdbscan_min_cluster_size", 500)),
         min_samples=int(cl.get("hdbscan_min_samples", 50)),
         metric="euclidean",
         cluster_selection_method="eom",
@@ -166,8 +267,8 @@ def main() -> int:
     )
     vectorizer = CountVectorizer(
         stop_words="english",
-        min_df=int(cl.get("vectorizer_min_df", 10)),
-        max_df=float(cl.get("vectorizer_max_df", 0.5)),
+        min_df=int(cl.get("vectorizer_min_df", 2)),
+        max_df=float(cl.get("vectorizer_max_df", 0.95)),
         max_features=int(cl.get("vectorizer_max_features", 20_000)),
         ngram_range=tuple(cl.get("vectorizer_ngram", [1, 2])),
     )
@@ -191,33 +292,46 @@ def main() -> int:
     df_fit["topic_source"] = "embedding"
     df_fit["probability"]  = np.nan
 
-    # ---------- 3. Fallback variant: works without primary -----------------
-    df_fb_assignments = pd.DataFrame(columns=["id", "source", "topic_id", "topic_source", "probability"])
+    # Extract small assignments table and free the large fit objects so the
+    # fallback transform step has the RAM headroom of an empty pod.
+    fit_assignments = df_fit[["id", "source", "topic_id", "topic_source", "probability"]].copy()
+    del X_fit, docs_fit, df_fit, df_ref_p
+    gc.collect()
+    _heartbeat()
+
+    # ---------- 3. Fallback variant streamed via duckdb anti-join ----------
+    df_fb_assignments = pd.DataFrame(
+        columns=["id", "source", "topic_id", "topic_source", "probability"]
+    )
     if fallback:
-        print(f"[step] reading fallback variant ({fallback}) for corpus")
-        df_corpus_fb = _read_source_variant(corpus_root, fallback)
-        already = set(df_corpus_p["id"])
-        df_corpus_fb = df_corpus_fb[~df_corpus_fb["id"].isin(already)].reset_index(drop=True)
-        print(f"        no-primary corpus works to transfer: {len(df_corpus_fb):,}")
-        _heartbeat()
-        if len(df_corpus_fb):
-            X_fb = _matrix(df_corpus_fb)
-            topics_fb, _probs_fb = topic_model.transform(
-                documents=_docs(df_corpus_fb), embeddings=X_fb
+        print(f"[step] streaming fallback variant ({fallback}) for no-primary works")
+        fb_chunks = []
+        n_done = 0
+        for chunk in _stream_variant_minus_primary(
+            corpus_root, fallback, primary, r2_cfg, chunk_rows=50_000
+        ):
+            topics_chunk, _probs_fb = topic_model.transform(
+                documents=_docs_from_df(chunk),
+                embeddings=_matrix_from_df(chunk),
             )
-            df_corpus_fb["topic_id"]     = np.asarray(topics_fb, dtype=np.int64)
-            df_corpus_fb["topic_source"] = "fallback"
-            df_corpus_fb["source"]       = "corpus"
-            df_corpus_fb["probability"]  = np.nan
-            df_fb_assignments = df_corpus_fb[["id", "source", "topic_id", "topic_source", "probability"]]
+            fb_chunks.append(pd.DataFrame({
+                "id":           chunk["id"].astype(str).values,
+                "source":       "corpus",
+                "topic_id":     np.asarray(topics_chunk, dtype=np.int64),
+                "topic_source": "fallback",
+                "probability":  np.nan,
+            }))
+            n_done += len(chunk)
+            print(f"        fallback {n_done:,}")
+            del chunk
             _heartbeat()
+        if fb_chunks:
+            df_fb_assignments = pd.concat(fb_chunks, ignore_index=True)
+        del fb_chunks
 
     # ---------- 4. Combine + build outputs ---------------------------------
     out_topics = pd.concat(
-        [
-            df_fit[["id", "source", "topic_id", "topic_source", "probability"]],
-            df_fb_assignments,
-        ],
+        [fit_assignments, df_fb_assignments],
         ignore_index=True,
     )
     out_topics["topic_id"] = out_topics["topic_id"].astype(np.int64)
@@ -231,7 +345,7 @@ def main() -> int:
     if "keypaper" not in cnt.columns: cnt["keypaper"] = 0
     cnt = cnt.rename(columns={"corpus": "n_corpus", "keypaper": "n_keypapers"})
 
-    kp_thresh = int(cl.get("keypaper_threshold", 5))
+    kp_thresh = int(cl.get("keypaper_threshold", 3))
     info = info.rename(columns={"Topic": "topic_id", "Name": "label", "Count": "n_total"})
     info = info.merge(cnt[["topic_id", "n_corpus", "n_keypapers"]],
                       on="topic_id", how="left")

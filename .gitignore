@@ -120,3 +120,4 @@ output/TCAC_2.0/
 # input
 input/tcac_1.0_ids.parquet
 
+output_local/

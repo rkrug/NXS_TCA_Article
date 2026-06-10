@@ -52,7 +52,6 @@ params:
 
 ```{r}
 #| label: setup
-
 library(targets)
 library(dplyr)
 library(arrow)
@@ -65,6 +64,19 @@ The data base is the OpenAlex snapshot from the `RELEASE 2026-01-15`. All metada
 
 
 # Methods
+
+
+![TCAC 2.0 pipeline overview as a directed acyclic graph, grouped into four stages: OpenAlex corpus assembly (search-term query → IDs → snapshot extraction), per-variant SPECTER2 embedding (via local or RunPod TEI), BERTopic clustering (Path A laptop CPU, Path B RunPod GPU reading from Cloudflare R2), and the visualisation layer that feeds the Quarto report. Shapes encode artefact type: documents for input files, cylinders for databases (local or cloud), rectangles for processing targets, and clouds for external services.](output/figures/mmd/pipeline.svg){#fig-pipeline-dag fig-alt="Directed acyclic graph of the TCAC 2.0 pipeline showing four subgraphs (corpus assembly, embeddings, topics dual-path, and visualisation/report) connected by directed edges between input files, databases, processing targets, and external services."}
+
+![End-to-end TCAC 2.0 pipeline sequence: the laptop orchestrator drives OpenAlex corpus assembly, per-variant SPECTER2 embedding (local TEI or RunPod TEI), optional Cloudflare R2 mirror, BERTopic clustering (Path A laptop CPU vs Path B RunPod GPU reading from R2), and final Quarto report generation.](output/figures/mmd/sequence.svg){#fig-pipeline-sequence fig-alt="Sequence diagram of the TCAC 2.0 pipeline showing the orchestrator coordinating OpenAlex API, local snapshot, local or RunPod TEI embedding, Cloudflare R2 storage, local or RunPod BERTopic clustering, and Quarto report rendering across five stages."}
+
+The pipeline orchestrator runs on the laptop and dispatches every step via R's `targets` package. Stage 1 assembles the corpus by querying the OpenAlex REST API for matching IDs and resolving keypapers, then extracting full records from a local OpenAlex snapshot. Stage 2 generates per-variant SPECTER2 embeddings via a TEI inference server — either local CPU/GPU or hosted on a RunPod GPU pod. Stage 3 mirrors the resulting parquet leaves to Cloudflare R2 (S3-compatible object storage), which decouples the laptop from the cluster-compute step. Stage 4 runs BERTopic on the embeddings, in one of two variants: a laptop-CPU sample-fit-and-transfer (Path A) for fast iteration, or a RunPod GPU full-corpus fit (Path B) where the pod reads embeddings directly from R2 via duckdb's `httpfs` extension. Stage 5 scores corpus works against keypapers, prepares visualisation data (`viz_*` targets), renders figures (`fig_*` targets), and assembles the Quarto report.
+
+The DAG view (@fig-pipeline-dag) emphasises data flow and artefact types; the sequence view (@fig-pipeline-sequence) emphasises the temporal order of interactions across actors during a single `tar_make()` invocation. The two are complementary — most readers will find the DAG sufficient for understanding *what* the pipeline does, and the sequence diagram useful for understanding *how* the orchestrator coordinates the external services.
+
+
+
+
 
 ## Functions Underlying the Compilation and Analysis of the Corpora
 

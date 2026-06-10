@@ -293,12 +293,17 @@ list(
   tar_target(
     bertopic_runpod_cfg,
     {
-      b <- yaml::read_yaml(config_file)$bertopic
+      y   <- yaml::read_yaml(config_file)
+      b   <- y$bertopic
       cfg <- b$configs[[b$active_runpod]]
       if (is.null(cfg)) {
         stop("bertopic.active_runpod '", b$active_runpod,
              "' not found under bertopic.configs in config.yaml")
       }
+      # Phase 1: embeddings live in R2. Merge r2 block into the cfg so the
+      # wrapper can translate local emb paths -> s3:// URIs without a
+      # second config target.
+      cfg$r2 <- y$r2
       cfg
     }
   ),
@@ -402,7 +407,7 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    viz_score_dist,
+    fig_score_dist,
     viz_score_dist_fig(viz_scores_long),
     format = qs2_format()
   ),
@@ -417,12 +422,12 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    viz_agree_fig,
+    fig_agree,
     viz_variant_agree_fig(viz_agree_data),
     format = qs2_format()
   ),
   tar_target(
-    viz_threshold,
+    fig_threshold,
     viz_threshold_fig(viz_scores_long),
     format = qs2_format()
   ),
@@ -463,7 +468,7 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    viz_umap,
+    fig_umap,
     viz_umap_fig(
       emb_corpus = viz_umap_join$emb_corpus,
       emb_keypaper = viz_umap_kp,
@@ -479,12 +484,12 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    viz_topics_tbl,
+    fig_topics_tbl,
     viz_topics_table(viz_topics_tbl_data),
     format = qs2_format()
   ),
   tar_target(
-    viz_topics,
+    fig_topics,
     viz_topics_fig(
       topics_tcac20 = topics_tcac20,
       emb_corpus = viz_umap_join$emb_corpus,

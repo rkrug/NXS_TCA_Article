@@ -23,7 +23,17 @@ PLATFORM ?= linux/amd64
         tar-make tar-visnetwork tar-outdated tar-invalidate tar-clean \
         docker-tei-build docker-tei-push docker-tei \
         docker-bertopic-build docker-bertopic-push docker-bertopic \
-        docker-all
+        docker-all \
+        mmd mmd-clean
+
+# Mermaid CLI binary. Install via `npm i -g @mermaid-js/mermaid-cli` or
+# `brew install mermaid-cli`. Override on the make line if needed.
+MMDC      ?= mmdc
+
+# Source diagrams + rendered outputs.
+MMD_SRC   := $(wildcard input/mmd/*.mmd)
+MMD_SVG   := $(MMD_SRC:input/mmd/%.mmd=output/figures/mmd/%.svg)
+MMD_PNG   := $(MMD_SRC:input/mmd/%.mmd=output/figures/mmd/%.png)
 
 help: ## Show this help message
 	@echo "TCAC 2.0 make targets:"
@@ -87,3 +97,23 @@ docker-bertopic-push: ## Push the BERTopic RunPod image to the registry
 docker-bertopic: docker-bertopic-build docker-bertopic-push ## Build + push BERTopic image
 
 docker-all: docker-tei docker-bertopic ## Build + push all docker images
+
+# --- mermaid diagrams -------------------------------------------------------
+# Renders every .mmd under input/mmd/ to SVG (vector) and PNG (raster) in
+# output/figures/mmd/. SVG is the recommended embed format for the QMD
+# report; PNG is a fallback for tools that don't render SVG.
+#
+# Requires the mermaid CLI (mmdc). On macOS: `brew install mermaid-cli`.
+
+output/figures/mmd/%.svg: input/mmd/%.mmd
+	@mkdir -p $(dir $@)
+	$(MMDC) -i $< -o $@ -b transparent
+
+output/figures/mmd/%.png: input/mmd/%.mmd
+	@mkdir -p $(dir $@)
+	$(MMDC) -i $< -o $@ -b white -s 2
+
+mmd: $(MMD_SVG) $(MMD_PNG) ## Render all mermaid diagrams to SVG + PNG
+
+mmd-clean: ## Remove all rendered mermaid output
+	rm -rf output/figures/mmd

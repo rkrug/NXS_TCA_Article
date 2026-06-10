@@ -179,14 +179,20 @@ embed_works <- function(
     verbose           = TRUE
   )
 
-  # ---- Re-partition into a single consolidated parquet per leaf ---------
-  # Output shape: <leaf_dir>/part-0.parquet — one file containing all rows,
-  # with row groups of ~50K rows so analytical reads stay fast even though
-  # the dataset is one file. config/source/variant are NOT written into the
-  # parquet itself; hive partitioning encodes them in the path, and
-  # arrow::open_dataset() synthesises them on read. A `batch` column is
-  # added from each scratch shard's batch number so the original
-  # embed_corpus_parallel ordering is recoverable.
+  # ---- Re-partition into ~1 GB consolidated parquet chunks per leaf -----
+  # Output shape: <leaf_dir>/part-{NNNN}.parquet — multiple files, each
+  # ~1 GB at SPECTER2 dimensionality (768 float32 cols × 250K rows). Row
+  # groups remain 50K rows so analytical reads stay fast. config/source/
+  # variant are NOT written into the parquet itself; hive partitioning
+  # encodes them in the path, and arrow::open_dataset() synthesises them
+  # on read. A `batch` column is added from each scratch shard's batch
+  # number so the original embed_corpus_parallel ordering is recoverable.
+  #
+  # Why multi-file: ~1 GB chunks let rclone resume per-chunk on
+  # interruption (not per-leaf which used to be ~14 GB), and let duckdb
+  # httpfs parallelise reads across files on the BERTopic pod. Skip-guard
+  # is still presence-based via the marker file; arrow's open_dataset
+  # globs `*.parquet` so it doesn't care about file count.
   #
   # Streamed via duckdb's COPY — the arrow-side variants (collect first,
   # lazy mutate, Scanner+ParquetFileWriter) all OOM'd at 4–5M rows on
@@ -207,14 +213,21 @@ embed_works <- function(
   }
 
   dir.create(leaf_dir, recursive = TRUE, showWarnings = FALSE)
-  out_tmp   <- file.path(leaf_dir, "part-0.parquet.tmp")
-  out_final <- file.path(leaf_dir, "part-0.parquet")
-  if (file.exists(out_tmp))   file.remove(out_tmp)
-  if (file.exists(out_final)) file.remove(out_final)
+  # Write into a sibling tmp dir, then atomically move files into the
+  # leaf. Avoids partial state if duckdb dies mid-write.
+  tmp_dir <- file.path(leaf_dir, ".parts.tmp")
+  if (dir.exists(tmp_dir)) unlink(tmp_dir, recursive = TRUE)
+  dir.create(tmp_dir, recursive = TRUE)
+  # Clear any stale part-*.parquet from a previous run in the leaf — the
+  # marker file is what makes a leaf "complete"; we never accept a leaf
+  # that has both old and new parts.
+  old_parts <- list.files(leaf_dir, pattern = "^part-.*[.]parquet$",
+                          full.names = TRUE)
+  if (length(old_parts)) file.remove(old_parts)
 
   shards_glob <- file.path(raw_label_dir, "batch=*", "embeddings-*.parquet")
   message(sprintf(
-    "[%s|%s] consolidating scratch shards into part-0.parquet via duckdb COPY",
+    "[%s|%s] consolidating scratch shards into ~1 GB part-NNNN.parquet chunks via duckdb COPY",
     source, variant_name
   ))
 
@@ -223,26 +236,48 @@ embed_works <- function(
   try(DBI::dbExecute(con, "PRAGMA enable_progress_bar"),       silent = TRUE)
   try(DBI::dbExecute(con, "PRAGMA progress_bar_time = 1000"),  silent = TRUE)
 
+  # FILE_SIZE_BYTES caps each file at ~1 GB; ROW_GROUP_SIZE keeps row
+  # groups at 50K rows for analytical-read efficiency. COMPRESSION SNAPPY
+  # is fast both ways; on float32 embeddings the savings are modest but
+  # the decode is essentially free.
   copy_sql <- sprintf(
     "COPY (
        SELECT * EXCLUDE (filename),
               CAST(regexp_extract(filename, '-(\\d+)\\.parquet$', 1) AS INTEGER) AS batch
        FROM read_parquet('%s', filename = true)
-     ) TO '%s' (FORMAT PARQUET, ROW_GROUP_SIZE 50000)",
-    shards_glob, out_tmp
+     ) TO '%s' (
+       FORMAT PARQUET,
+       ROW_GROUP_SIZE 50000,
+       FILE_SIZE_BYTES 1000000000,
+       FILENAME_PATTERN 'part-{i}',
+       COMPRESSION SNAPPY,
+       OVERWRITE_OR_IGNORE
+     )",
+    shards_glob, tmp_dir
   )
   DBI::dbExecute(con, copy_sql)
 
   n_written <- as.integer(DBI::dbGetQuery(con, sprintf(
-    "SELECT COUNT(*)::BIGINT AS n FROM read_parquet('%s')", out_tmp
+    "SELECT COUNT(*)::BIGINT AS n FROM read_parquet('%s/*.parquet')", tmp_dir
   ))$n)
 
   DBI::dbDisconnect(con, shutdown = TRUE)
-  file.rename(out_tmp, out_final)
+
+  # Move the new parquets into the leaf and drop the tmp dir.
+  new_parts <- list.files(tmp_dir, pattern = "^part-.*[.]parquet$",
+                          full.names = TRUE)
+  if (!length(new_parts)) {
+    stop("duckdb COPY produced no parquet files under ", tmp_dir)
+  }
+  for (p in new_parts) {
+    file.rename(p, file.path(leaf_dir, basename(p)))
+  }
+  unlink(tmp_dir, recursive = TRUE)
 
   message(sprintf(
-    "[%s|%s] consolidation done; wrote %s rows to %s",
-    source, variant_name, format(n_written, big.mark = ","), out_final
+    "[%s|%s] consolidation done; wrote %s rows across %d files to %s",
+    source, variant_name, format(n_written, big.mark = ","),
+    length(new_parts), leaf_dir
   ))
   write_embed_marker(leaf_dir, n_written)
 

@@ -34,25 +34,38 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 # ---- system deps -----------------------------------------------------------
 # curl + ca-certificates: idle watchdog uses curl to talk to the RunPod API
-# openssh-server: SSH transport so the orchestrator can scp/ssh in
+# openssh-server: SSH transport so the orchestrator can ssh in (cfg push +
+#   result download)
+# rsync: result-parquet download from /work/out back to laptop. Phase 1
+#   no longer rsyncs embeddings up — pod reads them from R2 directly via
+#   duckdb httpfs — but the small result download still uses rsync.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         openssh-server \
         curl \
         ca-certificates \
+        rsync \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/run/sshd /root/.ssh /work \
     && chmod 700 /root/.ssh
 
 # ---- python deps -----------------------------------------------------------
 # bertopic supplies the topic-modelling glue; pyarrow handles parquet I/O;
-# pyyaml reads the per-run cfg file. umap-learn + hdbscan-learn pulled
-# transitively by bertopic but harmless even though we replace them with
-# cuml at runtime.
+# pyyaml reads the per-run cfg file; duckdb streams the fallback variant
+# via anti-join so we don't materialise it alongside the primary at fit
+# time. umap-learn + hdbscan-learn are pulled transitively by bertopic
+# but harmless even though we replace them with cuml at runtime.
 RUN pip install --no-cache-dir \
         "bertopic>=0.16,<1" \
         "pyarrow" \
-        "pyyaml"
+        "pyyaml" \
+        "duckdb>=1.0,<2"
+
+# Pre-install duckdb's httpfs extension so the pod doesn't fetch it at
+# first use. Phase 1 reads embeddings from Cloudflare R2 via httpfs, so
+# this needs to be available even if the pod ends up on a network where
+# duckdb's extension repo is throttled.
+RUN python3 -c "import duckdb; con = duckdb.connect(); con.execute('INSTALL httpfs'); con.execute('LOAD httpfs')"
 
 # ---- runpodctl (for idle-watchdog self-stop) ------------------------------
 ARG RUNPODCTL_VERSION=v1.14.4

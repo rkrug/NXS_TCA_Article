@@ -67,7 +67,7 @@ tar_read(viz_score_summary_tbl)
 ```{r}
 #| label: fig-score-dist
 #| fig-cap: "Distribution of max cosine similarity to keypapers, per variant. Higher = closer to nearest reference. A clear bimodal shape indicates the embedding separates topic-relevant from off-topic works."
-tar_read(viz_score_dist)
+tar_read(fig_score_dist)
 ```
 
 Median and quantile breakdown:
@@ -105,7 +105,7 @@ poor quality.
 ```{r}
 #| label: fig-variant-agree
 #| fig-cap: "Per-work max similarity to keypapers, plotted pair-wise across the three variants. Each corpus work contributes one point per pair (coloured). The dashed diagonal is perfect agreement; points off it are works the two variants disagree about. Click or box/lasso-select to highlight a work's points across all pairs."
-tar_read(viz_agree_fig)
+tar_read(fig_agree)
 ```
 
 # Threshold
@@ -113,7 +113,7 @@ tar_read(viz_agree_fig)
 ```{r}
 #| label: fig-threshold-sweep
 #| fig-cap: "Number of corpus works with max cosine ≥ threshold, per variant."
-tar_read(viz_threshold)
+tar_read(fig_threshold)
 ```
 
 # Topic-space map (UMAP)
@@ -202,7 +202,7 @@ slider <- htmltools::tagList(
 #| echo: false
 #| fig-height: 9
 toggle
-tar_read(viz_umap)
+tar_read(fig_umap)
 slider
 ```
 
@@ -218,7 +218,7 @@ set.
 
 ```{r}
 #| label: tbl-topics
-tbl <- tar_read(viz_topics_tbl) |>
+tbl <- tar_read(fig_topics_tbl) |>
   DT::formatStyle(
     columns = 6, # column index (1-based here)
     fontSize = '60%' # or '80%', '0.8em', etc.
@@ -243,5 +243,5 @@ rm(tbl)
 #| label: fig-umap-topics
 #| fig-height: 9
 #| fig-cap: "UMAP coloured by BERTopic cluster id. Clustering ran on the 5-D UMAP (not this 2-D view), so spatial proximity here is only loosely correlated with cluster membership. Keypapers (red triangles) overlay the corpus."
-tar_read(viz_topics)
+tar_read(fig_topics)
 ```

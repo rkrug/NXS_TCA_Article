@@ -59,6 +59,24 @@ embeddings:
   #   max_batch_tokens: 65536
   #   max_concurrent: 512
 
+# Cloudflare R2 (S3-compatible object storage). The BERTopic RunPod path
+# reads embeddings directly from R2 via duckdb httpfs — no rsync upload.
+# Credentials live in keyring (laptop) and RunPod Secrets (pod); only the
+# non-secret addressing lives here.
+#
+# Path mapping: any local path under `embeddings_local_root` is translated
+# to s3://<bucket>/<embeddings_remote_prefix>/<relative-from-local-root>
+# by R/run_bertopic_runpod.R.
+r2:
+  endpoint:                26e6e95ff86cfcd155724000d2cdfbba.r2.cloudflarestorage.com
+  bucket:                  tcac-2-0
+  region:                  auto
+  embeddings_local_root:   output/TCAC_2.0/embeddings
+  embeddings_remote_prefix: embeddings
+  # Credentials never live here. Laptop uses rclone's config; the pod
+  # gets them as RunPod Secrets (template env vars):
+  #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+
 # NEW: dual-path BERTopic. Each named entry under `configs:` produces its
 # own (config, bertopic, variant) leaf under output/TCAC_2.0/topics/, so
 # multiple runs coexist on disk for comparison. Add entries by appending
@@ -91,8 +109,8 @@ bertopic:
     default_runpod:
       method: runpod
       # SSH transport to the RunPod bertopic-runpod pod
-      ssh_host:        <pod-id>.ssh.runpod.io
-      ssh_port:        22
+      ssh_host:        194.68.245.80
+      ssh_port:        22008
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work
@@ -100,7 +118,7 @@ bertopic:
       # + 105 keypapers). See TD_BERTopic.md for the reasoning behind each
       # value.
       umap_n_components: 5
-      umap_n_neighbors:  30                  # full-corpus density supports larger neighborhood
+      umap_n_neighbors:  30                  # full-corpus density supports larger neighbourhood
       umap_min_dist:     0.0
       umap_metric:       cosine
       # 500 ≈ 0.01% of corpus → expect ~200–500 topics. Tune up if too many
