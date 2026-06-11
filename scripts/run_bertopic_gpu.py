@@ -59,6 +59,21 @@ def _heartbeat():
         pass
 
 
+# Background thread that keeps the heartbeat fresh during long-running
+# library calls (duckdb scan, cuml.UMAP.fit, etc.) where the main thread
+# can't manually touch /work/.heartbeat. Started in main() once; killed
+# at process exit by daemon=True.
+def _start_heartbeat_thread(interval_s: int = 30):
+    import threading
+    def _loop():
+        while True:
+            _heartbeat()
+            time.sleep(interval_s)
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Schema helpers (shared with run_bertopic_local.py)
 # ---------------------------------------------------------------------------
@@ -191,6 +206,9 @@ def main() -> int:
     args = p.parse_args()
 
     _heartbeat()
+    # Keep the heartbeat fresh while long-running calls (R2 reads, cuml
+    # fit) hold the main thread.
+    _start_heartbeat_thread(interval_s=30)
 
     # Paths may be local or s3:// — keep them as strings, don't Path()-ify
     # (Path mangles s3:// into s3:/).

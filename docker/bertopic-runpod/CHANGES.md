@@ -7,6 +7,31 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.4 — 2026-06-11
+
+Survivability fixes prompted by the first Phase 1 dispatch:
+
+- **`/opt/run_bertopic_gpu.py`**: spawn a daemon thread on script start
+  that touches `/work/.heartbeat` every 30 seconds for the script's
+  lifetime. Survives long blocking calls (duckdb R2 reads, cuml.UMAP
+  fit, HDBSCAN) where the main thread can't manually heartbeat —
+  previously the watchdog (IDLE_MIN=10 default) would kill the pod
+  during the ~10 min R2 read of the primary corpus variant. The thread
+  is daemon=True so it dies with the process, allowing the watchdog to
+  cleanly idle-stop the pod ~10 min after script exit.
+- **Dockerfile**: add `ln -sf /opt/conda/bin/python /usr/local/bin/python`
+  so `python` resolves in non-interactive sshd-spawned shells. RAPIDS
+  base puts python under `/opt/conda/bin/` which isn't on the default
+  SSH PATH; without the symlink, `ssh ... 'python ...'` returns exit
+  code 127. The R wrapper's runtime workaround
+  (`[ -x /usr/local/bin/python ] || ln -sf ...`) is now redundant for
+  v0.1.4+ pods but harmless to leave in place for v0.1.3 backwards
+  compatibility.
+
+Pod template requirements unchanged from v0.1.3 (`PUBLIC_KEY`,
+`RUNPOD_API_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`IDLE_MIN`).
+
 ## v0.1.3 — 2026-06-09
 
 Phase 1 of the cloud-storage migration: embeddings now live in

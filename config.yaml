@@ -109,8 +109,8 @@ bertopic:
     default_runpod:
       method: runpod
       # SSH transport to the RunPod bertopic-runpod pod
-      ssh_host:        194.68.245.80
-      ssh_port:        22008
+      ssh_host:        195.26.232.139
+      ssh_port:        52057
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work

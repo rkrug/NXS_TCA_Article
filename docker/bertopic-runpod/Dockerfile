@@ -67,6 +67,11 @@ RUN pip install --no-cache-dir \
 # duckdb's extension repo is throttled.
 RUN python3 -c "import duckdb; con = duckdb.connect(); con.execute('INSTALL httpfs'); con.execute('LOAD httpfs')"
 
+# Make `python` resolve in non-interactive sshd-spawned shells. RAPIDS
+# base puts the python binary under /opt/conda/bin which isn't on the
+# default SSH PATH. Without this, ssh ... 'python ...' returns 127.
+RUN ln -sf /opt/conda/bin/python /usr/local/bin/python
+
 # ---- runpodctl (for idle-watchdog self-stop) ------------------------------
 ARG RUNPODCTL_VERSION=v1.14.4
 ADD https://github.com/runpod/runpodctl/releases/download/${RUNPODCTL_VERSION}/runpodctl-linux-amd64 /usr/local/bin/runpodctl

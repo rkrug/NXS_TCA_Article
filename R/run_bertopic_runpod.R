@@ -168,8 +168,10 @@ run_bertopic_runpod <- function(
       stop("emb path ", abs_local,
            " is not under r2.embeddings_local_root ", local_root)
     }
-    rel <- sub(paste0("^", gsub("([][.|()*+?^$\\\\])", "\\\\\\1", local_root),
-                      "/?"), "", abs_local)
+    # Path arithmetic — no regex, avoids POSIX-bracket-class gotchas with
+    # punctuation in the prefix.
+    rel <- substring(abs_local, nchar(local_root) + 1L)
+    rel <- sub("^/+", "", rel)
     sprintf("s3://%s/%s/%s",
             cfg$r2$bucket, cfg$r2$embeddings_remote_prefix, rel)
   }
@@ -200,8 +202,34 @@ run_bertopic_runpod <- function(
   # (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY). The wrapper does NOT pass
   # them — they live encrypted at rest on RunPod's side and are exposed
   # to the pod as env vars at boot.
+  #
+  # NOTE: non-interactive sshd sessions don't inherit the container's
+  # init env, so the Secrets aren't visible to the Python script by
+  # default. We pull them off /proc/1/environ (the entrypoint's env,
+  # which DOES have them) and export them before invoking python. The
+  # v0.1.4 image will fix this at the image level by writing the env to
+  # /etc/environment in the entrypoint.
   remote_cmd <- sprintf(
-    "set -euo pipefail; touch %s/.heartbeat; python /opt/run_bertopic_gpu.py %s %s %s %s %s",
+    paste0(
+      "set -euo pipefail; touch %s/.heartbeat; ",
+      # Make `python` resolve in non-interactive shells. RAPIDS base puts
+      # python under /opt/conda/bin which isn't on the default SSH PATH.
+      # No-op if already symlinked. Drop once v0.1.4 bakes this in.
+      "[ -x /usr/local/bin/python ] || ln -sf /opt/conda/bin/python /usr/local/bin/python; ",
+      # Export the entrypoint's env (R2_*, RUNPOD_API_KEY, etc.) into this shell.
+      "set -a; ",
+      "while IFS='=' read -r -d '' k v; do ",
+      "  case \"$k\" in ",
+      "    R2_*|RUNPOD_*|PUBLIC_KEY|IDLE_MIN) export \"$k=$v\" ;; ",
+      "  esac; ",
+      "done < /proc/1/environ; ",
+      "set +a; ",
+      # Sanity: bail before the long run if creds are missing.
+      "[ -n \"${R2_ACCESS_KEY_ID:-}\" ] || { echo 'R2_ACCESS_KEY_ID missing in /proc/1/environ' >&2; exit 2; }; ",
+      "[ -n \"${R2_SECRET_ACCESS_KEY:-}\" ] || { echo 'R2_SECRET_ACCESS_KEY missing' >&2; exit 2; }; ",
+      # Then dispatch the GPU script.
+      "python /opt/run_bertopic_gpu.py %s %s %s %s %s"
+    ),
     shQuote(remote_root),
     sprintf("--corpus-emb-dir %s",    shQuote(s3_corpus_dir)),
     sprintf("--reference-emb-dir %s", shQuote(s3_ref_dir)),
