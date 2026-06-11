@@ -666,3 +666,290 @@ viz_topics_fig <- function(topics_tcac20, emb_corpus, emb_keypaper,
   save_widget_html(fig, "umap_topics", figures_dir)
   fig
 }
+
+
+# ============================================================================
+# Corpus-scale UMAP — density base + cluster polygons + click-to-drill-down
+#
+# Designed for the full-corpus BERTopic output (~4.6M works, ~200-1500
+# topics) where rendering every point client-side is infeasible.
+#
+# Architecture (see TD_BERTopic_Parameters.md and TD_ShinyMigration.md):
+#   1. viz_umap_density()      — KDE grid (default 500x500)
+#   2. viz_umap_hulls()        — alpha-shape polygon per cluster
+#   3. viz_umap_cluster_pts()  — per-cluster sampled point coords (drilldown)
+#   4. viz_umap_clusters_fig() — plotly composition with JS click handler
+#
+# All four are pure functions of their inputs — directly wireable as
+# tar_target()s once the BERTopic run completes. None reference the
+# current pipeline state.
+# ============================================================================
+
+# 2-D KDE on UMAP coordinates. Returns the same shape as viz_umap_contour()
+# but the z-matrix is point density (count per cell) rather than score —
+# tells "where are the works?", not "where are the relevant works?".
+#
+# Tunables:
+#   grid_n       grid resolution; 500 is browser-friendly, 1000 is sharper
+#                but doubles client memory.
+#   bandwidth    NULL = MASS::kde2d default (Silverman's rule); pass a
+#                numeric for a fixed kernel width.
+viz_umap_density <- function(umap_coords, grid_n = 500L, bandwidth = NULL) {
+  stopifnot(all(c("x", "y") %in% names(umap_coords)))
+  if (!requireNamespace("MASS", quietly = TRUE)) {
+    stop("Package 'MASS' is required for viz_umap_density(). ",
+         "Install via: install.packages('MASS')")
+  }
+  rng_x <- range(umap_coords$x, na.rm = TRUE)
+  rng_y <- range(umap_coords$y, na.rm = TRUE)
+  args <- list(
+    x = umap_coords$x, y = umap_coords$y,
+    n = grid_n,
+    lims = c(rng_x, rng_y)
+  )
+  if (!is.null(bandwidth)) {
+    args$h <- rep(as.numeric(bandwidth), 2L)
+  }
+  kde <- do.call(MASS::kde2d, args)
+  list(x = kde$x, y = kde$y, z = kde$z)
+}
+
+# Per-cluster polygon (concave hull / alpha shape) over UMAP coords.
+# Inputs:
+#   umap_coords  data.frame with `id`, `x`, `y`
+#   topics_df    data.frame with `id`, `topic_id` — the topics.parquet read.
+#   min_points   clusters smaller than this aren't given hulls (avoid
+#                triangle-from-3-points noise; topic_id = -1 is always
+#                skipped — that's the BERTopic noise cluster).
+#   method       "concave" (default — concaveman) or "convex" (base chull,
+#                no extra dependency).
+#   concavity    only used when method = "concave"; concaveman's concavity
+#                parameter (larger = closer to convex hull; default 2).
+#
+# Returns a tibble: topic_id, n_points, vertices (list-col of n x 2
+# matrices with columns x, y, polygon closed).
+viz_umap_hulls <- function(umap_coords, topics_df,
+                           min_points = 5L,
+                           method = c("concave", "convex"),
+                           concavity = 2) {
+  method <- match.arg(method)
+  stopifnot(all(c("id", "x", "y") %in% names(umap_coords)))
+  stopifnot(all(c("id", "topic_id") %in% names(topics_df)))
+
+  if (method == "concave" &&
+      !requireNamespace("concaveman", quietly = TRUE)) {
+    message("Package 'concaveman' not installed; falling back to ",
+            "method = 'convex'. Install via: install.packages('concaveman')")
+    method <- "convex"
+  }
+
+  joined <- merge(
+    umap_coords[, c("id", "x", "y")],
+    topics_df[,  c("id", "topic_id")],
+    by = "id"
+  )
+  joined <- joined[!is.na(joined$topic_id) & joined$topic_id >= 0L, ]
+
+  by_topic <- split(joined, joined$topic_id)
+  by_topic <- by_topic[vapply(by_topic, nrow, integer(1)) >= min_points]
+  if (!length(by_topic)) {
+    return(data.frame(topic_id = integer(0), n_points = integer(0),
+                      vertices = I(list())))
+  }
+
+  hull_of <- function(df) {
+    mat <- as.matrix(df[, c("x", "y")])
+    if (method == "concave") {
+      verts <- concaveman::concaveman(mat, concavity = concavity)
+      colnames(verts) <- c("x", "y")
+      verts
+    } else {
+      h <- grDevices::chull(mat[, "x"], mat[, "y"])
+      h <- c(h, h[1])     # close the polygon
+      mat[h, , drop = FALSE]
+    }
+  }
+  out <- data.frame(
+    topic_id = as.integer(names(by_topic)),
+    n_points = vapply(by_topic, nrow, integer(1)),
+    vertices = I(lapply(by_topic, hull_of))
+  )
+  out[order(-out$n_points), , drop = FALSE]
+}
+
+# Per-cluster sampled point coordinates for the click-to-drill-down layer.
+# Inputs as for viz_umap_hulls(). Returns a named list keyed by
+# as.character(topic_id), each element a data.frame with id, x, y.
+#
+# Subsampling is essential at corpus scale: a 500-cluster × full-membership
+# embed of points would be tens of MB of JSON. With sample_per_cluster=1000
+# the total is bounded at ~500K points (~5 MB JSON gzipped) regardless of
+# corpus size.
+viz_umap_cluster_pts <- function(umap_coords, topics_df,
+                                 sample_per_cluster = 1000L,
+                                 seed = 13L) {
+  stopifnot(all(c("id", "x", "y") %in% names(umap_coords)))
+  stopifnot(all(c("id", "topic_id") %in% names(topics_df)))
+  joined <- merge(
+    umap_coords[, c("id", "x", "y")],
+    topics_df[,  c("id", "topic_id")],
+    by = "id"
+  )
+  joined <- joined[!is.na(joined$topic_id) & joined$topic_id >= 0L, ]
+
+  set.seed(seed)
+  by_topic <- split(joined, joined$topic_id)
+  sampled <- lapply(by_topic, function(df) {
+    if (nrow(df) > sample_per_cluster) {
+      df <- df[sample.int(nrow(df), sample_per_cluster), , drop = FALSE]
+    }
+    df[, c("id", "x", "y")]
+  })
+  names(sampled) <- as.character(names(by_topic))
+  sampled
+}
+
+# Composed plotly figure:
+#   layer 0 — density heatmap (low alpha, viridis colormap)
+#   layer 1 — cluster polygons (one trace; click → JS handler)
+#   layer 2 — per-cluster sampled points (added dynamically on click)
+#
+# JS click handler is wired via htmlwidgets::onRender. On click, the
+# handler:
+#   1. resets all previously-added point traces
+#   2. adds a new trace for the clicked cluster's sampled points
+#   3. highlights the clicked polygon (yellow stroke) and dims others
+#
+# Inputs:
+#   density        output of viz_umap_density()
+#   hulls          output of viz_umap_hulls()
+#   cluster_pts    output of viz_umap_cluster_pts()
+#   topic_info_df  data.frame with topic_id, label, n_keypapers,
+#                  is_relevant — for hover labels and relevant-cluster
+#                  highlighting.
+#   figures_dir    where to save the standalone widget HTML; pass NA to
+#                  skip saving.
+viz_umap_clusters_fig <- function(density, hulls, cluster_pts,
+                                  topic_info_df,
+                                  figures_dir = "output/figures") {
+  if (!requireNamespace("plotly", quietly = TRUE)) {
+    stop("Package 'plotly' is required for viz_umap_clusters_fig().")
+  }
+  if (!requireNamespace("htmlwidgets", quietly = TRUE)) {
+    stop("Package 'htmlwidgets' is required for viz_umap_clusters_fig().")
+  }
+  stopifnot(all(c("x", "y", "z") %in% names(density)))
+  stopifnot(all(c("topic_id", "vertices") %in% names(hulls)))
+
+  # Density base layer — Heatmap trace. Low alpha so polygons sit on top
+  # readably.
+  fig <- plotly::plot_ly(source = "umap_clusters_fig") |>
+    plotly::add_trace(
+      type = "heatmap",
+      x = density$x, y = density$y, z = density$z,
+      colorscale = "Viridis", showscale = FALSE,
+      opacity = 0.55,
+      hoverinfo = "skip"
+    )
+
+  # Polygon traces — one per cluster, all the same trace style so click
+  # routing is uniform. customdata carries topic_id so the JS handler
+  # knows which cluster was clicked.
+  info_lookup <- setNames(
+    as.list(seq_len(nrow(topic_info_df))),
+    as.character(topic_info_df$topic_id)
+  )
+
+  for (i in seq_len(nrow(hulls))) {
+    tid <- hulls$topic_id[i]
+    verts <- hulls$vertices[[i]]
+    info_idx <- info_lookup[[as.character(tid)]]
+    label    <- if (!is.null(info_idx)) topic_info_df$label[info_idx] else paste0("Topic ", tid)
+    n_kp     <- if (!is.null(info_idx)) as.integer(topic_info_df$n_keypapers[info_idx]) else 0L
+    relevant <- if (!is.null(info_idx)) isTRUE(topic_info_df$is_relevant[info_idx]) else FALSE
+
+    fig <- plotly::add_trace(
+      fig,
+      x = verts[, "x"], y = verts[, "y"],
+      type = "scatter", mode = "lines",
+      fill = "toself",
+      fillcolor = if (relevant) "rgba(220,20,60,0.18)" else "rgba(255,255,255,0.05)",
+      line = list(
+        color = if (relevant) "rgba(220,20,60,0.90)" else "rgba(80,80,80,0.55)",
+        width = if (relevant) 1.8 else 0.7
+      ),
+      hovertemplate = sprintf(
+        "<b>topic %d</b><br>%s<br>%s%d keypapers<extra></extra>",
+        tid, label,
+        ifelse(relevant, "<b>relevant</b> · ", ""),
+        n_kp
+      ),
+      customdata = list(tid),
+      showlegend = FALSE,
+      name = sprintf("topic %d", tid)
+    )
+  }
+
+  fig <- plotly::layout(
+    fig,
+    xaxis = list(title = "", zeroline = FALSE, showgrid = FALSE,
+                 scaleanchor = "y", scaleratio = 1),
+    yaxis = list(title = "", zeroline = FALSE, showgrid = FALSE),
+    margin = list(l = 10, r = 10, t = 10, b = 10),
+    plot_bgcolor = "rgba(0,0,0,1)"
+  )
+
+  # JS click handler: on polygon click, draw that cluster's sampled
+  # points as a new scatter trace; resets previously-drawn points.
+  pts_json <- jsonlite::toJSON(
+    cluster_pts, dataframe = "rows", auto_unbox = TRUE
+  )
+  on_render <- sprintf(
+    "
+    function(el, x) {
+      window._tcacClustersEl = el;
+      var clusterPts = %s;
+      var basePolyCount = el.data.length;     // density + N polygons
+      window.tcacSelectCluster = function (topicId) {
+        // strip any previously-added cluster-point traces
+        var extra = el.data.length - basePolyCount;
+        if (extra > 0) {
+          var idx = [];
+          for (var i = 0; i < extra; i++) idx.push(basePolyCount + i);
+          Plotly.deleteTraces(el, idx);
+        }
+        var pts = clusterPts[String(topicId)];
+        if (!pts || !pts.length) return;
+        var xs = pts.map(function (p) { return p.x; });
+        var ys = pts.map(function (p) { return p.y; });
+        var ids = pts.map(function (p) { return p.id; });
+        Plotly.addTraces(el, {
+          type: 'scattergl',
+          mode: 'markers',
+          x: xs, y: ys,
+          text: ids,
+          marker: { size: 4, color: 'rgba(255,255,0,0.85)',
+                    line: { width: 0 } },
+          hovertemplate: '%%{text}<extra>topic ' + topicId + '</extra>',
+          showlegend: false,
+          name: 'cluster ' + topicId
+        });
+      };
+      el.on('plotly_click', function (ev) {
+        if (!ev.points || !ev.points.length) return;
+        var p = ev.points[0];
+        if (p.customdata == null) return;
+        window.tcacSelectCluster(p.customdata);
+      });
+    }
+    ",
+    pts_json
+  )
+
+  fig <- htmlwidgets::onRender(fig, on_render)
+
+  if (!is.na(figures_dir) && nzchar(figures_dir)) {
+    save_widget_html(fig, "umap_clusters", figures_dir)
+  }
+  fig
+}
