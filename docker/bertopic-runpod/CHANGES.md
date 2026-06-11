@@ -7,6 +7,26 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.6 — pending build
+
+Operational ergonomics improvements gathered from the first Phase 1
+dispatches.
+
+- **Dockerfile**: add `ENV PYTHONUNBUFFERED=1`. The GPU script's
+  `print()` lines (`[info] ...`, `[step] ...`, `[done] ...`) and
+  library messages from cuml / BERTopic were getting stuck in the
+  4 KB SSH pipe buffer for minutes at a time, so the orchestrator
+  R session looked stalled while real work was happening. With
+  unbuffered stdout/stderr, every log line flushes immediately and
+  the R console shows the script's progress in real time.
+
+Future-work tickets queued here for the next rebuild (not yet
+applied):
+
+- Subsample-fit option for cuml.UMAP at full corpus scale (Path B
+  hangs on L40S at 4.6M rows; A100 is the workaround). See
+  [TODO_BERTopicStageCaching.md](../../TODO_BERTopicStageCaching.md).
+
 ## v0.1.5 — 2026-06-11
 
 Driver-compatibility fix prompted by the first Phase 1 dispatch hitting

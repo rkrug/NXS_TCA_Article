@@ -96,8 +96,14 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/bertopic_idle_watchdog.sh /opt/run_be
 RUN mkdir -p /work && touch /work/.heartbeat
 
 # ---- defaults --------------------------------------------------------------
+# PYTHONUNBUFFERED=1: flush stdout/stderr per-line instead of block-buffering
+# the 4 KB SSH pipe. Without this, [info]/[step] log lines from
+# /opt/run_bertopic_gpu.py stall in the buffer for minutes before the
+# orchestrator (R session) sees them, making in-flight progress
+# invisible. cuml and BERTopic library messages are also covered.
 ENV IDLE_MIN=5 \
-    POLL_SEC=30
+    POLL_SEC=30 \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 22
 
