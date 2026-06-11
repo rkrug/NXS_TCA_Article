@@ -7,6 +7,30 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.7 — pending build
+
+Robust idle-watchdog handling for long GIL-holding library calls.
+
+The first successful Phase 1 dispatch on an A100 SXM 80GB ran cleanly
+through R2 read + matrix extraction + GPU upload, then got killed by
+the idle watchdog ~14 min into the cuml.UMAP.fit kernel. Root cause:
+cuml's Python wrapper holds the GIL through the k-NN graph build
+phase (~10-15 min), starving the in-Python heartbeat thread added in
+v0.1.4. Heartbeat went stale, watchdog fired, pod stopped — but the
+GPU workload was healthy throughout.
+
+- **entrypoint.sh**: add an external bash heartbeat keeper that
+  touches /work/.heartbeat every 30 s WHILE a
+  /opt/run_bertopic_gpu.py process is alive. Lives outside Python,
+  no GIL contention. The Python-side thread is kept as belt-and-
+  braces for the R2 read phase. When the GPU script exits the
+  external keeper stops touching the file and the watchdog can
+  correctly stop the pod.
+
+With this change `IDLE_MIN` can stay at sensible defaults (5-10 min)
+— previously users had to bump it to 60-90 min to survive cuml fits,
+which delayed legitimate idle-stop after a script crash.
+
 ## v0.1.6 — pending build
 
 Operational ergonomics improvements gathered from the first Phase 1

@@ -49,6 +49,26 @@ sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin prohibit-password/' /etc/ssh/ss
 sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/'  /etc/ssh/sshd_config
 service ssh start
 
+# External heartbeat keeper — touches /work/.heartbeat every 30 s while
+# a /opt/run_bertopic_gpu.py process is running. Lives in entrypoint.sh
+# (bash, no GIL) so it's immune to GIL holds inside cuml.UMAP.fit
+# (~10-15 min during k-NN graph build) that starve the in-Python
+# heartbeat thread. The Python thread is kept as belt-and-braces for
+# the R2 read phase where the GIL is released frequently.
+#
+# Heartbeat is touched ONLY when the GPU script is alive. When the
+# script exits (clean or crash), touches stop and the idle watchdog
+# takes over correctly. The pod isn't kept alive past the workload.
+(
+    while true; do
+        if pgrep -f '/opt/run_bertopic_gpu.py' >/dev/null 2>&1; then
+            touch /work/.heartbeat
+        fi
+        sleep 30
+    done
+) &
+echo "[entrypoint] external heartbeat keeper started (touches /work/.heartbeat every 30 s while run_bertopic_gpu.py is running)"
+
 # Idle watchdog — auto-stop after IDLE_MIN min of heartbeat inactivity.
 # Only meaningful on a real RunPod pod where RUNPOD_POD_ID is set.
 if [ -n "${RUNPOD_POD_ID:-}" ]; then
