@@ -7,6 +7,22 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.5 — 2026-06-11
+
+Driver-compatibility fix prompted by the first Phase 1 dispatch hitting
+a cuSPARSE init regression in NVIDIA driver 550.x running CUDA 12.5.
+
+- **Dockerfile**: drop base image from `rapidsai/base:24.10-cuda12.5-py3.11`
+  to `rapidsai/base:24.10-cuda12.0-py3.11`. The 12.0 runtime works
+  reliably with driver >= 525 — covers essentially every RunPod node;
+  12.5 requires >= 555 which is uncommon. RAPIDS 24.10 ships tags for
+  11.8 / 12.0 / 12.5 only (no 12.4). cuml/bertopic functionality is
+  identical at 12.0.
+
+Companion change in `R/run_bertopic_runpod.R`: the pre-flight driver
+check now requires driver >= 525 (was 555 for v0.1.4). Older drivers
+abort dispatch in seconds rather than 5 min into cuml.UMAP.fit.
+
 ## v0.1.4 — 2026-06-11
 
 Survivability fixes prompted by the first Phase 1 dispatch:

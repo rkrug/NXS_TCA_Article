@@ -22,7 +22,14 @@
 # RAPIDS base image bundles Python + cuml + cudf for the supported CUDA
 # versions. cuml's UMAP and HDBSCAN GPU implementations are the whole point
 # of Path B. Pin the tag to keep cuml/cuda combo reproducible.
-FROM rapidsai/base:24.10-cuda12.5-py3.11
+#
+# CUDA 12.0 (not 12.5): RunPod's 550-series host drivers (most common as
+# of 2026-06) ship with a cuSPARSE regression that fails cuml.UMAP.fit
+# initialisation when the runtime is 12.5. CUDA 12.0 requires driver
+# >= 525 — covered by essentially every RunPod node. RAPIDS 24.10 ships
+# tags for 11.8 / 12.0 / 12.5 only; 12.4 doesn't exist. We lose no
+# cuml/bertopic functionality at 12.0.
+FROM rapidsai/base:24.10-cuda12.0-py3.11
 
 # rapidsai/base runs as a non-root user by default; we need root for apt,
 # sshd, and to keep the runtime simple (RunPod's SSH access is root-based).

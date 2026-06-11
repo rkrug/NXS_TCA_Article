@@ -155,6 +155,35 @@ run_bertopic_runpod <- function(
                   run_name, ssh_target))
   ssh_cmd("true")   # errors out if connection / auth fails
 
+  # ---- 1b. GPU driver pre-flight ---------------------------------------
+  # The v0.1.5+ image is built on CUDA 12.0, which works reliably with
+  # NVIDIA driver >= 525 — covers essentially every RunPod node. Pre-v0.1.5
+  # (CUDA 12.5) needed >= 555 which was uncommon. We use >= 525 as the
+  # threshold — fails loud only on genuinely old hosts.
+  drv_args <- c(
+    "-i", shQuote(ssh_key),
+    "-p", as.character(ssh_port),
+    "-o", "StrictHostKeyChecking=accept-new",
+    ssh_target,
+    shQuote("nvidia-smi --query-gpu=driver_version --format=csv,noheader")
+  )
+  drv_line <- tryCatch(
+    suppressWarnings(system2("ssh", drv_args, stdout = TRUE, stderr = FALSE)),
+    error = function(e) character(0)
+  )
+  drv_line <- drv_line[nzchar(drv_line)][1]
+  drv_major <- as.integer(sub("\\..*", "", drv_line %||% ""))
+  message(sprintf("[bertopic_runpod|%s] pod GPU driver: %s",
+                  run_name, drv_line %||% "<unknown>"))
+  if (is.na(drv_major) || drv_major < 525L) {
+    stop(sprintf(
+      "Pod driver is %s — cuml on CUDA 12.0 needs >= 525.x. ",
+      drv_line %||% "<unknown>"),
+      "Terminate this pod and deploy a fresh one on a different host. ",
+      "See TD_RunPodSetup.md for guidance."
+    )
+  }
+
   # ---- 2. Translate local emb dirs -> s3:// URIs -----------------------
   # Targets passes corpus_emb_dir as a local filesystem path under
   # `embeddings_local_root` (e.g. .../embeddings/config=SPECTER2_runpod/
