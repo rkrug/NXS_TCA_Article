@@ -57,16 +57,30 @@ RUN apt-get update \
     && chmod 700 /root/.ssh
 
 # ---- python deps -----------------------------------------------------------
-# bertopic supplies the topic-modelling glue; pyarrow handles parquet I/O;
-# pyyaml reads the per-run cfg file; duckdb streams the fallback variant
-# via anti-join so we don't materialise it alongside the primary at fit
-# time. umap-learn + hdbscan-learn are pulled transitively by bertopic
-# but harmless even though we replace them with cuml at runtime.
+# v0.1.8 refactored away from BERTopic's monolithic fit_transform to direct
+# cuml + sklearn orchestration with R2 stage caching. The remaining deps:
+#   pyarrow / duckdb : parquet I/O + R2 anti-join streaming
+#   pyyaml           : per-run cfg file
+#   boto3            : R2 client for pickle + meta.json artefacts (parquet
+#                      uses pyarrow's R2 path via the bucket name in URLs)
+#   cloudpickle      : cuml model serialisation; stdlib pickle chokes on
+#                      cuml's C-extension internals
+#   scikit-learn     : CountVectorizer + TfidfTransformer for c-TF-IDF
+#                      (already pulled by bertopic but pinned explicitly here
+#                      because v0.1.8 doesn't import bertopic at all)
+#
+# bertopic stays installed for two reasons: (1) backwards compat with anyone
+# who copies the older monolithic gpu script onto the pod, (2) it pulls
+# umap-learn + hdbscan-learn which are harmless backups even though we
+# always use cuml at runtime.
 RUN pip install --no-cache-dir \
         "bertopic>=0.16,<1" \
         "pyarrow" \
         "pyyaml" \
-        "duckdb>=1.0,<2"
+        "duckdb>=1.0,<2" \
+        "boto3" \
+        "cloudpickle" \
+        "scikit-learn"
 
 # Pre-install duckdb's httpfs extension so the pod doesn't fetch it at
 # first use. Phase 1 reads embeddings from Cloudflare R2 via httpfs, so

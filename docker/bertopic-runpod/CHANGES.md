@@ -7,7 +7,61 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
-## v0.1.7 — pending build
+## v0.1.8 — 2026-06-12 (built + pushed)
+
+Major refactor: BERTopic stage caching on R2.
+
+Three production failures pointed to the same root cause — BERTopic's
+monolithic `fit_transform` holds the full corpus in memory through its
+Representation step, OOM'ing on a 116 GB pod at the 4.6M-row corpus.
+This refactor replaces BERTopic entirely with direct cuml + sklearn
+orchestration and adds R2-backed stage caching.
+
+- **`/opt/run_bertopic_gpu.py`**: rewritten as six explicit stages:
+  1. cuml.UMAP fit on corpus primary variant only
+     (keypapers decoupled — Option A from TODO_BERTopicStageCaching.md)
+  2. cuml.HDBSCAN fit on UMAP coords
+  3. c-TF-IDF on per-topic CONCATENATED corpus docs
+     (~500 topic-documents fed to sklearn.CountVectorizer instead of
+      4.6M individual docs — cuts peak Representation-step RAM by ~3x)
+  4. Keypaper projection via umap_model.transform() +
+     hdbscan.approximate_predict()
+  5. Fallback variant projection (no-abstract corpus works), same
+     mechanism, streamed via duckdb anti-join
+  6. Final output composition (topic_info / topics / topic_words)
+
+  Each fit-stage writes intermediate state to
+  `s3://<bucket>/intermediate/config=<X>/umap_cfg=<hash>/hdbscan_cfg=<hash>/ctfidf_cfg=<hash>/`
+  with cascade cfg-hash keying. Re-running with unchanged upstream
+  params loads from cache; changing `hdbscan_*` reuses UMAP cache;
+  changing `vectorizer_*` reuses UMAP+HDBSCAN; keypaper swap touches
+  none of the cache.
+
+- **Dockerfile**: added pip deps `boto3` (R2 client), `cloudpickle`
+  (cuml model serialisation — stdlib pickle chokes on cuml's
+  C-extensions), and explicit `scikit-learn` (was pulled transitively
+  by bertopic; pinned explicitly since v0.1.8 doesn't import bertopic
+  at all).
+
+- **bertopic**: still installed in the image for backwards-compat
+  with anyone copying an older monolithic script onto a v0.1.8 pod;
+  the v0.1.8 script doesn't import it.
+
+Pod template env vars unchanged:
+- `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (Secrets — now also used
+  for cache reads/writes, not only embedding reads)
+- `RUNPOD_API_KEY`, `PUBLIC_KEY`, `IDLE_MIN` as before.
+
+Expected R2 cache footprint at TCAC scale (~$0.30/month even for 20+
+parameter iterations):
+
+| Stage | Size |
+|---|---|
+| UMAP model + coords | ~2-2.5 GB |
+| HDBSCAN model + topic assignments | ~600-900 MB |
+| c-TF-IDF outputs | ~50 MB |
+
+## v0.1.7 — 2026-06-11 (built + pushed)
 
 Robust idle-watchdog handling for long GIL-holding library calls.
 
@@ -31,7 +85,7 @@ With this change `IDLE_MIN` can stay at sensible defaults (5-10 min)
 — previously users had to bump it to 60-90 min to survive cuml fits,
 which delayed legitimate idle-stop after a script crash.
 
-## v0.1.6 — pending build
+## v0.1.6 — 2026-06-11 (built + pushed)
 
 Operational ergonomics improvements gathered from the first Phase 1
 dispatches.
