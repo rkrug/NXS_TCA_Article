@@ -7,6 +7,36 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.12 — pending build
+
+Memory fix in stage_ctfidf — push per-topic aggregation into duckdb.
+
+After v0.1.11 dispatched and successfully wrote UMAP + HDBSCAN
+caches to R2, the c-TF-IDF stage OOM'd while building docs_per_topic.
+The previous implementation in pandas materialised:
+
+- df_text (corpus text): ~50 GB
+- merged df with topic_id column: ~50 GB
+- df["doc"] concatenated title+abstract column: +10 GB
+- groupby/apply intermediates: ~20-30 GB
+
+Plus the ~25 GB of cuml UMAP + HDBSCAN models already on the host →
+~115 GB total. On a 117 GB pod that triggered the kernel OOM-killer.
+
+scripts/run_bertopic_gpu.py stage_ctfidf:
+- Replace pandas-side join + groupby + apply with a single duckdb
+  SQL query that does join + group_concat in C++ with bounded
+  internal memory (~few GB).
+- Topics_corpus DataFrame registered as a duckdb view; query reads
+  corpus parquet directly from R2 (no pre-materialisation), joins
+  on id, filters topic_id >= 0, group_concat's title+abstract per
+  topic.
+- Output: ~500 rows of {topic_id, doc}, total ~10 GB.
+- New peak in stage_ctfidf ~35-40 GB (cuml models + duckdb buffers +
+  final docs_per_topic + Python overhead) vs ~115 GB before.
+
+No Dockerfile changes; pure Python script refactor.
+
 ## v0.1.11 — pending build
 
 Skip corpus text columns in the UMAP read.

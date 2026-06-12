@@ -520,31 +520,46 @@ def stage_ctfidf(corpus_root: str, topics_corpus: pd.DataFrame,
 
     print(f"[cache miss] c-TF-IDF: s3://{bucket}/{prefix}")
 
-    print("[step] reading corpus text (id + title_clean + abstract_clean)")
-    df_text = _read_text_only(corpus_root, cl["primary_variant"], r2_cfg)
-    print(f"        loaded {len(df_text):,} corpus text rows")
-    _heartbeat()
+    # Aggregate corpus text per topic ENTIRELY in duckdb. Previous
+    # implementation materialised the full merged DataFrame (~50 GB
+    # text + 10 GB doc column + ~20 GB groupby intermediates) which
+    # OOM'd on 117 GB pods alongside the ~25 GB cuml models already in
+    # host RAM. duckdb's C++ join + group_concat streams the parquet
+    # files, evaluates the join, groups by topic_id, and concatenates
+    # docs all with bounded internal memory (~few GB). Output is just
+    # ~500 rows of {topic_id, doc} — total concatenated text ~10 GB.
+    print("[step] streaming corpus text + aggregating per topic via duckdb")
+    con = duckdb.connect()
+    try:
+        _setup_duckdb_s3(con, r2_cfg)
+        pattern = _glob(corpus_root, cl["primary_variant"])
 
-    df = df_text.merge(
-        topics_corpus[["id", "topic_id"]].astype({"id": str}),
-        on="id", how="inner"
-    )
-    del df_text
+        # Register topics_corpus DataFrame as a duckdb view. Only the
+        # two columns we need; cast id to VARCHAR to match parquet.
+        topics_small = topics_corpus[["id", "topic_id"]].copy()
+        topics_small["id"] = topics_small["id"].astype(str)
+        topics_small["topic_id"] = topics_small["topic_id"].astype("int64")
+        con.register("topics_corpus_view", topics_small)
+
+        docs_per_topic = con.execute(f"""
+            SELECT
+                tc.topic_id AS topic_id,
+                string_agg(
+                    COALESCE(c.title_clean, '') || ' ' || COALESCE(c.abstract_clean, ''),
+                    ' '
+                ) AS doc
+            FROM read_parquet('{pattern}', hive_partitioning = false) c
+            JOIN topics_corpus_view tc
+              ON CAST(c.id AS VARCHAR) = tc.id
+            WHERE tc.topic_id >= 0
+            GROUP BY tc.topic_id
+            ORDER BY tc.topic_id
+        """).fetchdf()
+        del topics_small
+    finally:
+        con.close()
     gc.collect()
-
-    df["doc"] = (df["title_clean"].fillna("").astype(str)
-                 + " "
-                 + df["abstract_clean"].fillna("").astype(str))
-    df = df[df["topic_id"] >= 0]
-
-    print(f"[step] aggregating corpus docs per topic ({df['topic_id'].nunique()} topics)")
-    docs_per_topic = (
-        df.groupby("topic_id", sort=True)["doc"]
-          .apply(lambda s: " ".join(s.values))
-          .reset_index()
-    )
-    del df
-    gc.collect()
+    print(f"        aggregated to {len(docs_per_topic)} topic-documents")
     _heartbeat()
 
     print(f"[step] CountVectorizer + TfidfTransformer on {len(docs_per_topic)} topic-documents")
