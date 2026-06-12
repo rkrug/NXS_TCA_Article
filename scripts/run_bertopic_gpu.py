@@ -141,9 +141,40 @@ def _setup_duckdb_s3(con: duckdb.DuckDBPyConnection, r2_cfg: dict) -> None:
     con.execute("SET s3_use_ssl=true")
 
 
+def _read_embeddings_only(emb_root: str, variant: str, r2_cfg: dict) -> pd.DataFrame:
+    """Read id + embedding columns only — no text. Used for UMAP fit and
+    keypaper projection stages where the title/abstract text is unneeded.
+
+    Skipping text shrinks the DataFrame from ~50-70 GB to ~14 GB at 4.6M
+    rows — the difference between OOM and comfortable on pods with
+    ~80-100 GB host RAM."""
+    con = duckdb.connect()
+    try:
+        _setup_duckdb_s3(con, r2_cfg)
+        pattern = _glob(emb_root, variant)
+        schema = con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{pattern}', hive_partitioning = false) LIMIT 0"
+        ).fetchdf()
+        cols_all = schema["column_name"].tolist()
+        emb_cols = _embedding_columns(cols_all)
+        if not emb_cols:
+            raise RuntimeError(f"No embedding columns (V<int>) found at {pattern}")
+        keep = (["id"] if "id" in cols_all else []) + emb_cols
+        select_list = ", ".join(f'"{c}"' for c in keep)
+        df = con.execute(
+            f"SELECT {select_list} FROM read_parquet('{pattern}', hive_partitioning = false)"
+        ).fetchdf()
+        if df.empty:
+            raise FileNotFoundError(f"No rows at {pattern}")
+        return df
+    finally:
+        con.close()
+
+
 def _read_full_variant_with_text(emb_root: str, variant: str, r2_cfg: dict) -> pd.DataFrame:
     """Read embeddings + text columns (title_clean, abstract_clean) via duckdb.
-    Used for the UMAP-fit stage which needs both for the cache write."""
+    Kept for backwards-compat / future use; current callers use the
+    text-less or text-only variants to bound memory."""
     con = duckdb.connect()
     try:
         _setup_duckdb_s3(con, r2_cfg)
@@ -346,8 +377,8 @@ def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
         return umap_model, umap_coords
 
     print(f"[cache miss] UMAP: s3://{bucket}/{prefix}")
-    print("[step] reading corpus primary variant for UMAP fit")
-    df_corpus = _read_full_variant_with_text(corpus_root, cl["primary_variant"], r2_cfg)
+    print("[step] reading corpus primary variant (embeddings only, no text) for UMAP fit")
+    df_corpus = _read_embeddings_only(corpus_root, cl["primary_variant"], r2_cfg)
     n_corpus = len(df_corpus)
     print(f"        loaded {n_corpus:,} corpus rows")
     _heartbeat()
@@ -577,7 +608,8 @@ def stage_ctfidf(corpus_root: str, topics_corpus: pd.DataFrame,
 def stage_project_keypapers(refer_root: str, umap_model, hdbscan_model,
                             r2_cfg: dict, cl: dict) -> pd.DataFrame:
     print("[step] projecting keypapers into fitted UMAP + HDBSCAN")
-    df_kp = _read_full_variant_with_text(refer_root, cl["primary_variant"], r2_cfg)
+    # Keypaper projection only needs id + embeddings, no text.
+    df_kp = _read_embeddings_only(refer_root, cl["primary_variant"], r2_cfg)
     print(f"        loaded {len(df_kp):,} keypapers")
     X_kp = _matrix_from_df(df_kp)
 

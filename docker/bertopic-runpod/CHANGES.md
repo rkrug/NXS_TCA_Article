@@ -7,24 +7,51 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
-## v0.1.10 — pending build
+## v0.1.11 — pending build
 
-Memory-pressure fix in stage_umap.
+Skip corpus text columns in the UMAP read.
 
-The first v0.1.9 dispatch OOM'd at ~12 min on a pod with ~80-100 GB
-host RAM during the matrix-extraction phase. Root cause: stage_umap
-holds the full pandas DataFrame (~50-70 GB of text + embeddings) alive
-through `cuml.UMAP.fit_transform`, which itself allocates ~15-20 GB of
-host-side k-NN scratch.
+After v0.1.10 shipped with the `del df_corpus` fix, the first
+v0.1.10 dispatch still OOM'd at ~13 min on a 117 GB A100 PCIe pod
+during the duckdb fetchdf() conversion of the corpus DataFrame —
+peak ~115 GB BEFORE UMAP fit had even started. v0.1.10's del
+df_corpus only frees memory AFTER the read completes, so it doesn't
+help when the read itself is the OOM cause.
+
+Root cause: `_read_full_variant_with_text` loads
+`title_clean + abstract_clean + V1..V768` for all 4.6M rows. The
+text columns alone are ~50-70 GB; embeddings are only ~14 GB. Stage
+1 (UMAP fit) and Stage 4 (keypaper projection) never use the text
+columns — those are only needed in Stage 3 (c-TF-IDF), which
+already re-reads them separately via `_read_text_only`.
+
+- **`/opt/run_bertopic_gpu.py`** new helper `_read_embeddings_only`
+  reads id + V<int> columns only, skipping the bulky text. Cuts the
+  corpus DataFrame size from ~50-70 GB to ~14 GB.
+- `stage_umap` and `stage_project_keypapers` switch to the new
+  text-less reader.
+- `_read_full_variant_with_text` is kept for backwards-compat but no
+  longer called from the script.
+
+Combined with v0.1.10's del df_corpus before fit_transform, peak
+host RAM in stage_umap drops from ~115 GB (v0.1.10) to ~30-40 GB
+(v0.1.11). Any pod with ≥60 GB host RAM is now safe.
+
+No Dockerfile or entrypoint changes; pure Python script edits.
+
+## v0.1.10 — 2026-06-12 (built + pushed, ran but OOM'd at the read step)
+
+Memory-pressure fix #1 in stage_umap.
 
 - **`/opt/run_bertopic_gpu.py`** `stage_umap`: extract `ids` + numpy
   matrix `X` from df_corpus, then `del df_corpus; gc.collect()` BEFORE
-  calling fit_transform. The corpus text isn't needed again until
-  the c-TF-IDF stage, which re-reads it from R2 via duckdb. Drops
-  peak host RAM during UMAP fit from ~100 GB to ~30-40 GB.
+  calling fit_transform. Designed to free ~70 GB of text + embeddings
+  before cuml.UMAP's host-side k-NN scratch allocations.
 
-Now any pod with ≥60 GB host RAM handles the workload comfortably.
-A100 PCIe 80GB pods that ship with ~80 GB RAM no longer OOM here.
+In production this turned out to be necessary but not sufficient —
+the corpus read itself peaked at ~115 GB before the del statement
+could run. v0.1.11 follows up with the second piece (skip text
+columns entirely in stage_umap's reader).
 
 No Dockerfile or entrypoint changes; pure Python script edit.
 
