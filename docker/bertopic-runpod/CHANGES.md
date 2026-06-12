@@ -9,7 +9,9 @@ Semantic versioning, loosely:
 
 ## v0.1.9 — pending build
 
-Reliability fix: large-object multipart upload to R2.
+Two reliability fixes folded into one image rebuild.
+
+### A. Large-object multipart upload to R2
 
 The first v0.1.8 dispatch completed cuml.UMAP fit on the full 4.6M
 corpus (2091 s = 35 min), then failed when uploading the model
@@ -28,6 +30,25 @@ anything > 5 MB.
   goes from "single PUT that randomly fails" to ~20-40 s reliable.
 
 No Dockerfile changes; boto3 already includes the multipart code.
+
+### B. External heartbeat keeper self-match bug (regression in v0.1.7)
+
+The bash heartbeat keeper added in v0.1.7 had the same self-matching
+bug we already fixed in pod_watch.sh: `pgrep -f '/opt/run_bertopic_gpu.py'`
+matches the keeper's own bash subshell (its argv literally contains
+the script path). So the loop touched /work/.heartbeat forever even
+after python died, defeating the watchdog.
+
+In a recent run this manifested as the watchdog log showing "0 min
+idle" minutes after the python process crashed — pod stayed alive
+billing $1.69/h with no work to do until manually terminated.
+
+- **docker/bertopic-runpod/entrypoint.sh**: anchor the pgrep regex
+  with `^python.*/opt/run_bertopic_gpu\.py` so it matches only
+  processes whose command line STARTS with "python". Bash subshells
+  whose command lines start with "bash" no longer match. Now the
+  watchdog correctly idle-stops the pod within IDLE_MIN minutes of a
+  python exit (clean or crash).
 
 ## v0.1.8 — 2026-06-12 (built + pushed)
 

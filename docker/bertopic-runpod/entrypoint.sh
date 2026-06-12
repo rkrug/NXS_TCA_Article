@@ -59,15 +59,24 @@ service ssh start
 # Heartbeat is touched ONLY when the GPU script is alive. When the
 # script exits (clean or crash), touches stop and the idle watchdog
 # takes over correctly. The pod isn't kept alive past the workload.
+#
+# NOTE on the pgrep regex: '^python.*/opt/run_bertopic_gpu\.py'.
+# Plain pgrep -f '/opt/run_bertopic_gpu.py' matches THIS bash subshell
+# itself — its own argv contains the literal string. The loop would
+# then touch the heartbeat forever even after python died, defeating
+# the watchdog. Anchoring with ^python forces the match to a process
+# whose command line STARTS with 'python' (i.e. the actual GPU script
+# invocation), excluding any bash shell that just references the
+# string. Same bug class as pod_watch.sh had — fixed identically.
 (
     while true; do
-        if pgrep -f '/opt/run_bertopic_gpu.py' >/dev/null 2>&1; then
+        if pgrep -f '^python.*/opt/run_bertopic_gpu\.py' >/dev/null 2>&1; then
             touch /work/.heartbeat
         fi
         sleep 30
     done
 ) &
-echo "[entrypoint] external heartbeat keeper started (touches /work/.heartbeat every 30 s while run_bertopic_gpu.py is running)"
+echo "[entrypoint] external heartbeat keeper started (touches /work/.heartbeat every 30 s while a python /opt/run_bertopic_gpu.py process is running)"
 
 # Idle watchdog — auto-stop after IDLE_MIN min of heartbeat inactivity.
 # Only meaningful on a real RunPod pod where RUNPOD_POD_ID is set.
