@@ -1,17 +1,65 @@
-# TD — BERTopic Stage Caching (future optimisation)
+# TD — BERTopic Stage Caching
 
-Future-work notes for splitting the monolithic BERTopic pipeline into
-cacheable stages, so re-tuning `hdbscan_*` or vectorizer parameters
-doesn't trigger a full re-run of the expensive UMAP fit.
+> **Status update 2026-06-12**: implemented in image
+> `bertopic-runpod:v0.1.8` and [scripts/run_bertopic_gpu.py](scripts/run_bertopic_gpu.py).
+> The script now does direct cuml + sklearn orchestration with R2
+> cache at each stage boundary; BERTopic itself is bypassed entirely
+> (one of the side benefits is escaping BERTopic's Representation-step
+> OOM on the 4.6M-row corpus — see "BERTopic bypass" below).
+>
+> The remaining future-work item from this doc is the **R-side target
+> split** ("Option A" in the original discussion), which is now mostly
+> cosmetic — see "R-side target split — cosmetic only" near the
+> bottom.
 
-Not implemented. This file captures the design so the work can be
-picked up cleanly when the iteration cost justifies it.
+Notes for splitting the monolithic BERTopic pipeline into cacheable
+stages, so re-tuning `hdbscan_*` or vectorizer parameters doesn't
+trigger a full re-run of the expensive UMAP fit.
 
 Companion to [TD_BERTopic.md](TD_BERTopic.md) (architecture),
 [TD_BERTopic_Parameters.md](TD_BERTopic_Parameters.md) (per-parameter
 reference), and [TD_RunPodSetup.md](TD_RunPodSetup.md) (pod template).
 
-## Why this isn't done today
+## BERTopic bypass — incidental OOM fix in the same refactor
+
+`BERTopic.fit_transform`'s Representation step OOM'd on the 4.6M-row
+corpus even on a 116 GB pod. Tracing the memory growth showed it
+wasn't from data ingest (which peaked at ~85 GB) — it was from
+BERTopic's internal Representation step tokenizing every one of the
+4.6M individual documents through CountVectorizer + maintaining
+internal probability and topic-embedding matrices for general
+flexibility.
+
+The canonical c-TF-IDF formulation in [the BERTopic paper](https://arxiv.org/abs/2203.05794)
+is actually much simpler:
+
+> For each topic, concatenate all member documents into a single
+> "topic document". Apply sklearn's CountVectorizer + TfidfTransformer
+> to the set of topic-documents. The resulting term weights *are* the
+> per-topic word distribution.
+
+Because we now have ~500 topic-documents (one per HDBSCAN cluster) of
+roughly 100 KB-1 MB each, CountVectorizer peak memory drops from
+~30 GB to <1 GB. **No information is lost** — every word in every
+corpus paper still contributes to its assigned topic's distribution.
+The only thing we give up is BERTopic's per-document representation
+flexibility, which TCAC doesn't use.
+
+So v0.1.8 ships two improvements that travel together:
+
+1. **R2 stage caching** (the original ask) — re-tuning HDBSCAN or
+   c-TF-IDF reuses the UMAP cache.
+2. **BERTopic bypass** — direct cuml + sklearn orchestration. Sidesteps
+   the Representation OOM and is paper-defensible as "c-TF-IDF per the
+   original BERTopic formulation (Grootendorst 2022)".
+
+The bypass was *needed* because cache alone doesn't reduce peak
+memory — the first run still has to complete UMAP + HDBSCAN +
+c-TF-IDF, and the OOM would have hit at the c-TF-IDF stage even with
+perfect cache plumbing. The two refactors share most of the same code
+churn, so doing them together cost no more than either alone.
+
+## Why this wasn't done before v0.1.8
 
 The current Phase 1 dispatch runs the entire BERTopic pipeline inside
 one Python process per invocation:
@@ -175,7 +223,39 @@ rclone backend lifecycle r2:tcac-2-0 \
 30 days is a comfortable headroom: anything not touched in a month
 is unlikely to be reused, and lifecycle deletes are async + free.
 
-### R side: split the target
+### R side: split the target — cosmetic only after v0.1.8
+
+> **Note**: this section is the only remaining future-work item in
+> this doc. As of v0.1.8 the Python script does cascade-hash caching
+> internally, so a single `topics_tcac20_runpod` dispatch already
+> reaps the full compute savings — the pod just downloads cached
+> intermediates from R2 at each stage boundary instead of recomputing.
+> Splitting the R target into three changes **nothing about compute
+> cost**; it only changes how `tar_outdated()` reports the situation
+> to the user.
+>
+> Concretely: with the current single-target setup, changing
+> `hdbscan_min_cluster_size` shows `topics_tcac20_runpod` as outdated.
+> A `tar_make()` dispatches one pod run that skips the UMAP cache and
+> only re-fits HDBSCAN + c-TF-IDF — fast and cheap. The user sees
+> "topics_tcac20_runpod re-built" in tar_make's output, even though
+> only some stages re-ran.
+>
+> With the R-target split, the same change would invalidate
+> `hdbscan_fit_runpod` + `topics_tcac20_runpod` (and not
+> `umap_fit_runpod`), giving more precise tar_outdated reporting.
+> Pretty but not load-bearing for TCAC's single-user workflow.
+>
+> **When this would become worth doing**:
+> - Multiple authors running cfg variations and wanting clean
+>   tar_outdated visibility of who needs what.
+> - Multi-machine workflows where different stages run on different
+>   pods/hosts.
+> - A CI pipeline that fires only the changed stage's pod.
+>
+> Left in this doc as the documented upgrade path; not on the
+> roadmap. If it goes ahead, the sketch below is the implementation
+> shape.
 
 Replace the current single target with three:
 

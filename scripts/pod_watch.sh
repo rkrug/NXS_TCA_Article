@@ -63,18 +63,51 @@ echo "→ logging to ${LOG_FILE}"
         -o StrictHostKeyChecking=accept-new \
         -o ServerAliveInterval=60 \
         "${SSH_USER}@${SSH_HOST}" \
-        "while sleep ${INTERVAL}; do
+        "
+        # Read the pod's cgroup memory limit once. RunPod uses cgroups v2
+        # (memory.max under /sys/fs/cgroup/). ps's pmem reads the host's
+        # total (~1 TB on shared hosts) so it underreports the pod-level
+        # pressure. We use the cgroup limit to compute pod_mem% which
+        # matches the RunPod dashboard.
+        #
+        # cgroup files report BYTES. ps reports rss in KB. We normalise
+        # to KB everywhere for the awk arithmetic.
+        POD_RAM_BYTES=
+        if [ -f /sys/fs/cgroup/memory.max ]; then
+            POD_RAM_BYTES=\$(cat /sys/fs/cgroup/memory.max)
+        elif [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+            POD_RAM_BYTES=\$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)
+        fi
+        if [ \"\$POD_RAM_BYTES\" = max ] || [ -z \"\$POD_RAM_BYTES\" ]; then
+            # cgroup says unlimited; fall back to /proc/meminfo MemTotal
+            # (already in KB).
+            POD_RAM_KB=\$(awk '/MemTotal/{print \$2}' /proc/meminfo)
+        else
+            POD_RAM_KB=\$((POD_RAM_BYTES / 1024))
+        fi
+        echo \"# pod RAM limit: \$((POD_RAM_KB / 1024 / 1024)) GB\"
+        echo
+
+        while sleep ${INTERVAL}; do
             echo '--- '\$(date +%T)' ---'
-            # Match the python process specifically, not the bash parent which
-            # also has 'run_bertopic_gpu' in its argv. Use full path /opt/...
-            # which is unique to the actual python invocation.
-            pid=\$(pgrep -f '/opt/run_bertopic_gpu.py' | head -1)
+            # Match the python process specifically. Plain pgrep -f also
+            # matches:
+            #   * the wrapper's bash shell that exec'd python
+            #   * the entrypoint's heartbeat-keeper bash loop (v0.1.7+),
+            #     whose argv literally contains '/opt/run_bertopic_gpu.py'
+            # Both look like 0%/0 GB processes and mask the real numbers.
+            # Filter ps -eo so command starts with 'python' and contains
+            # the script path.
+            pid=\$(ps -eo pid,comm,args --no-headers | \
+                   awk '\$2 ~ /^python/ && /\\/opt\\/run_bertopic_gpu\\.py/ {print \$1; exit}')
             if [ -n \"\$pid\" ]; then
-                # ps prints vsz / rss in KB; awk converts to GB for readability.
-                ps -o etime,pcpu,pmem,vsz,rss --pid \$pid --no-headers | \
-                    awk '{
-                        printf \"  etime=%-8s cpu=%5.1f%%  mem=%4.1f%%  vsz=%6.1fGB  rss=%6.1fGB\\n\", \
-                               \$1, \$2, \$3, \$4/1024/1024, \$5/1024/1024
+                # ps prints vsz / rss in KB. awk converts to GB and also
+                # computes pod_mem% = rss_bytes / cgroup_limit_bytes.
+                ps -o etime,pcpu,vsz,rss --pid \$pid --no-headers | \
+                    awk -v pod_ram=\$POD_RAM_KB '{
+                        pod_pct = (\$4 * 100.0) / pod_ram
+                        printf \"  etime=%-8s cpu=%5.1f%%  pod_mem=%5.1f%%  vsz=%6.1fGB  rss=%6.1fGB\\n\", \
+                               \$1, \$2, pod_pct, \$3/1024/1024, \$4/1024/1024
                     }'
             else
                 echo 'no python /opt/run_bertopic_gpu.py process running'

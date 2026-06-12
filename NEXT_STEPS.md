@@ -59,23 +59,27 @@ Last updated: 2026-06-11.
 
 ## Medium-term — keypaper-swap workflow
 
-- [ ] **Implement BERTopic stage caching**
-  per [TODO_BERTopicStageCaching.md](TODO_BERTopicStageCaching.md).
-  - [ ] Python: split `scripts/run_bertopic_gpu.py` into `umap-fit` /
-    `hdbscan-fit` / `ctfidf` / `project-keypapers` subcommands.
-  - [ ] Wire each to write/read intermediate state under
-    `s3://tcac-2-0/intermediate/...`.
-  - [ ] R-side: split `topics_tcac20_runpod` into
-    `umap_fit_runpod` + `hdbscan_fit_runpod` + `topics_tcac20_runpod`.
-  - [ ] Add scoped `bertopic_runpod_cfg_umap` /
-    `bertopic_runpod_cfg_hdbscan` targets for hash-scoped invalidation.
-  - [ ] R2 lifecycle rule: 30-day TTL on `intermediate/` prefix.
-
-- [ ] **Decouple keypapers from BERTopic fit** (Option A in the TODO).
-  Required for the keypaper-swap workflow to be cheap. Refactor the
-  GPU script so BERTopic fits on corpus only; keypapers are projected
-  after the fact via `umap_model.transform()` +
-  `hdbscan.approximate_predict()`.
+- [x] **Implement BERTopic stage caching (Option B from earlier
+  discussion — Python-internal staging, R targets unchanged)**.
+  Done in v0.1.8 image / `scripts/run_bertopic_gpu.py` refactor.
+  Six explicit stages with cascade cfg-hash keying, R2-backed.
+  Keypapers decoupled from BERTopic fit (Option A from the TODO).
+  Memory-friendly c-TF-IDF on per-topic concatenated docs (sidesteps
+  the Representation-step OOM that killed three earlier runs).
+- [ ] **R-side target split (upgrade to "Option A from the original
+  discussion")**: split `topics_tcac20_runpod` into
+  `umap_fit_runpod` + `hdbscan_fit_runpod` + `topics_tcac20_runpod`
+  with scoped `bertopic_runpod_cfg_umap` /
+  `bertopic_runpod_cfg_hdbscan` cfg subsets. Lets `tar_outdated()`
+  report per-stage rather than treating the whole pipeline as one
+  blob. Compute savings are the same as v0.1.8; the gain is
+  orchestration clarity. Deferred unless the workflow grows.
+- [ ] **R2 lifecycle rule: 30-day TTL on `intermediate/` prefix**.
+  Run once via rclone:
+  ```bash
+  rclone backend lifecycle r2:tcac-2-0 \
+    set --rule 'prefix=intermediate/,days=30,action=delete'
+  ```
 
 - [ ] **Add named `keypaper_sets:` config block**
   per the new section in
@@ -97,6 +101,17 @@ Last updated: 2026-06-11.
   topic × set, etc.). Already sketched in
   [TODO_BERTopicStageCaching.md](TODO_BERTopicStageCaching.md).
 
+## Optional — implement if/when the pain materialises
+
+- [ ] **Detached BERTopic dispatch** — make a pod run survive
+  Ctrl-C in R, R/RStudio crashes, laptop sleep, or laptop ↔ pod
+  network breakdown. See [TODO_DetachedDispatch.md](TODO_DetachedDispatch.md)
+  for the full design. Stage caching already mitigates ~most of the
+  same risk class (worst-case loss with Ctrl-C today is ~30-60 min,
+  one stage's compute); this would shrink that to "zero loss".
+  ~1 day of work, no image rebuild required (R wrapper only).
+  Trigger criteria documented in the TODO.
+
 ## Deferred — not on roadmap, kept for reference
 
 - **Full cloud migration**
@@ -114,6 +129,9 @@ Last updated: 2026-06-11.
 
 ## Done — most recent first
 
+- [x] **v0.1.8 image** (stage caching + BERTopic-bypass) — pending build.
+- [x] **v0.1.7 image** (external bash heartbeat keeper, GIL-immune) — `a46a261`.
+- [x] **v0.1.6 image** (PYTHONUNBUFFERED=1 for real-time log flushing) — `dba7af2`.
 - [x] **v0.1.5 image** (CUDA 12.0 base + driver pre-flight) — `499a488`.
 - [x] **TODO_ rename + stage caching design** — `27bc7ee`.
 - [x] **Density+polygon viz helpers** — `7d2b16d`.
