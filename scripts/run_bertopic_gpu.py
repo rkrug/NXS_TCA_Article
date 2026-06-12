@@ -345,6 +345,15 @@ _CTFIDF_FIELDS = _HDBSCAN_FIELDS + (
     "vectorizer_ngram", "top_n_words",
 )
 
+# Fallback projection depends on the fitted UMAP + HDBSCAN models PLUS the
+# fallback variant name. It does NOT depend on the keypaper set or the
+# c-TF-IDF params. Putting it on the hdbscan_cfg branch (with an extra
+# `fallback_variant` field) keeps the cache valid across keypaper swaps
+# and c-TF-IDF re-tunes.
+_FALLBACK_FIELDS = _HDBSCAN_FIELDS + (
+    "fallback_variant",
+)
+
 
 def _cfg_subset(cl: dict, fields: tuple) -> dict:
     return {k: cl.get(k) for k in fields}
@@ -646,12 +655,28 @@ def stage_project_keypapers(refer_root: str, umap_model, hdbscan_model,
 # ---------------------------------------------------------------------------
 
 def stage_project_fallback(corpus_root: str, umap_model, hdbscan_model,
-                           r2_cfg: dict, cl: dict) -> pd.DataFrame:
+                           r2_cfg: dict, config_name: str, cl: dict,
+                           umap_hash: str, hdbscan_hash: str,
+                           fallback_hash: str) -> pd.DataFrame:
     fallback = cl.get("fallback_variant")
     empty_cols = ["id", "source", "topic_id", "topic_source", "probability"]
     if not fallback:
         return pd.DataFrame(columns=empty_cols)
 
+    bucket = r2_cfg["bucket"]
+    prefix = (f"intermediate/config={config_name}/umap_cfg={umap_hash}/"
+              f"hdbscan_cfg={hdbscan_hash}/fallback_cfg={fallback_hash}")
+    keys = {
+        "topics": f"{prefix}/fallback_topics.parquet",
+        "meta":   f"{prefix}/meta.json",
+    }
+    client = _r2_client(r2_cfg)
+
+    if _r2_exists(client, bucket, keys["topics"]):
+        print(f"[cache hit] fallback: s3://{bucket}/{prefix}")
+        return _parquet_from_r2(client, bucket, keys["topics"])
+
+    print(f"[cache miss] fallback: s3://{bucket}/{prefix}")
     print(f"[step] streaming fallback variant ({fallback}) for no-primary corpus works")
     from cuml.cluster.hdbscan import approximate_predict
 
@@ -675,9 +700,17 @@ def stage_project_fallback(corpus_root: str, umap_model, hdbscan_model,
         _heartbeat()
         del chunk, X_chunk, umap_chunk
 
-    if not fb_chunks:
-        return pd.DataFrame(columns=empty_cols)
-    return pd.concat(fb_chunks, ignore_index=True)
+    if fb_chunks:
+        fallback_topics = pd.concat(fb_chunks, ignore_index=True)
+    else:
+        fallback_topics = pd.DataFrame(columns=empty_cols)
+
+    print(f"[cache write] fallback topics to s3://{bucket}/{prefix}")
+    _parquet_to_r2(client, bucket, keys["topics"], fallback_topics)
+    _meta_to_r2(client, bucket, keys["meta"], _cfg_subset(cl, _FALLBACK_FIELDS), "fallback")
+    _heartbeat()
+
+    return fallback_topics
 
 
 # ---------------------------------------------------------------------------
@@ -743,8 +776,10 @@ def main() -> int:
     # trace in the log.
     umap_hash    = _cfg_hash(_cfg_subset(cl, _UMAP_FIELDS))
     hdbscan_hash = _cfg_hash(_cfg_subset(cl, _HDBSCAN_FIELDS))
-    ctfidf_hash  = _cfg_hash(_cfg_subset(cl, _CTFIDF_FIELDS))
-    print(f"[info] cfg hashes  umap={umap_hash}  hdbscan={hdbscan_hash}  ctfidf={ctfidf_hash}")
+    ctfidf_hash   = _cfg_hash(_cfg_subset(cl, _CTFIDF_FIELDS))
+    fallback_hash = _cfg_hash(_cfg_subset(cl, _FALLBACK_FIELDS))
+    print(f"[info] cfg hashes  umap={umap_hash}  hdbscan={hdbscan_hash}  "
+          f"ctfidf={ctfidf_hash}  fallback={fallback_hash}")
 
     # -------- Stage 1: UMAP fit (or load) --------------------------------
     umap_model, umap_coords = stage_umap(corpus_root, r2_cfg, config_name, cl, umap_hash)
@@ -772,7 +807,11 @@ def main() -> int:
     _heartbeat()
 
     # -------- Stage 5: project fallback variant --------------------------
-    topics_fb = stage_project_fallback(corpus_root, umap_model, hdbscan_model, r2_cfg, cl)
+    topics_fb = stage_project_fallback(
+        corpus_root, umap_model, hdbscan_model,
+        r2_cfg, config_name, cl,
+        umap_hash, hdbscan_hash, fallback_hash
+    )
     _heartbeat()
 
     # -------- Stage 6: combine + per-topic counts + final outputs --------

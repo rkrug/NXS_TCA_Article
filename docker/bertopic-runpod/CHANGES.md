@@ -7,6 +7,41 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.13 — pending build
+
+Cache the fallback variant projection on R2.
+
+After v0.1.12 completed the first full Phase 1 run (UMAP +
+HDBSCAN + c-TF-IDF + keypaper projection + fallback projection +
+final writes), it became clear that the keypaper-swap workflow
+still pays ~15-25 min for the fallback projection on every
+re-dispatch — even though that work depends only on the corpus
+(via the fitted UMAP and HDBSCAN models), NOT on the keypaper set
+or the c-TF-IDF params.
+
+Caching the fallback at the natural cache boundary cuts the
+keypaper-swap cost from ~20-30 min to ~5-10 min.
+
+scripts/run_bertopic_gpu.py:
+- New `_FALLBACK_FIELDS = _HDBSCAN_FIELDS + ("fallback_variant",)`
+  so changing the fallback variant correctly invalidates the
+  fallback cache without invalidating HDBSCAN or c-TF-IDF.
+- stage_project_fallback now signs and checks an R2 cache at
+  `intermediate/.../hdbscan_cfg=<hdbscan_hash>/fallback_cfg=<fallback_hash>/`
+  storing a single `fallback_topics.parquet` (id, source, topic_id,
+  topic_source='fallback', probability) plus a meta.json sidecar.
+- main() computes fallback_hash and passes umap_hash, hdbscan_hash,
+  fallback_hash, and config_name to the stage function.
+- The [info] cfg-hashes line at the top of every run now also
+  prints the fallback hash.
+
+Cache cascade semantics: changing hdbscan_min_cluster_size →
+invalidates fallback (because hdbscan_hash is upstream); changing
+fallback_variant alone → invalidates fallback only; keypaper-set
+swap touches nothing in the cache.
+
+No Dockerfile changes; pure Python script edit.
+
 ## v0.1.12 — pending build
 
 Memory fix in stage_ctfidf — push per-topic aggregation into duckdb.
