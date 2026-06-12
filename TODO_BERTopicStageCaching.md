@@ -97,17 +97,83 @@ python -m bertopic_pipeline ctfidf \
     + handles fallback variant transform
 ```
 
-### Intermediate storage — three options
+### Intermediate storage — Cloudflare R2
 
-| Option | Where | Pros | Cons |
-|---|---|---|---|
-| **R2** (recommended) | `s3://tcac-2-0/intermediate/config=…/cfg_hash=<umap-hash>/...` | Survives pod termination; shareable across pods; reuses Phase 1 infra | One extra R2 write per stage (~250 MB upload) |
-| **RunPod Network Volume** | `/work/intermediate/` (volume mount) | No extra upload | Pod-template-specific; loses portability |
-| **rsync to laptop** | `output/TCAC_2.0/intermediate/...` | Reusable from local Path A too | Bandwidth-intensive (intermediate may be GB) |
+**Decision**: all intermediate state lives in R2 under
+`s3://tcac-2-0/intermediate/...`. Same bucket as Phase 1 embeddings;
+hive-partitioned with cfg-hash prefixes so parallel runs with
+different parameters don't collide.
 
-R2 is the cleanest: cfg-hashed prefixes mean two parallel runs with
-different UMAP params get separate intermediate storage; HDBSCAN can
-re-run from any cached UMAP without re-fit.
+Why R2 (not pod volume, not laptop):
+
+- **Survives pod termination.** A re-tune on a fresh pod reads the
+  previous run's UMAP cache without any local state.
+- **Multi-machine friendly.** Multiple researchers / multiple pods
+  all read from the same canonical cache.
+- **Reuses Phase 1 infra.** Same bucket, same credentials, same
+  duckdb/rclone tooling. No new pieces.
+- **Cheap.** ~3 GB per cached fit at $0.015/GB-month → ~$0.05/month
+  per cached fit. Even 20 mixed-parameter iterations stay under
+  $0.30/month. Trivially below the compute savings.
+- **No upload cost.** R2 has zero egress; pod-to-R2 write bandwidth
+  is ~50-100 MB/s, so a 2-3 GB intermediate upload is ~30-60 s.
+
+Rejected alternatives:
+
+- **RunPod Network Volume**: locks the cache to one pod template;
+  doesn't survive volume detach; can't be shared across machines.
+- **rsync to laptop**: bandwidth-intensive (2-3 GB per stage) over
+  residential uplinks; ties the cache to one machine.
+
+### R2 layout
+
+```
+s3://tcac-2-0/intermediate/
+  config=SPECTER2_runpod/                  # embedding config
+    umap_cfg=<umap-hash>/                  # hash of UMAP-only cfg subset
+      umap_model.pkl                       # cuml.UMAP fitted model (~2 GB)
+      umap_coords.parquet                  # id, V1..V5 (~80 MB)
+      meta.json                            # cfg dump, fit timestamp, image SHA
+
+      hdbscan_cfg=<hdbscan-hash>/          # hash of UMAP+HDBSCAN cfg subset
+        hdbscan_model.pkl                  # cuml.HDBSCAN fitted model (~700 MB)
+        topics.parquet                     # id, topic_id, prob (~90 MB)
+
+        ctfidf_cfg=<ctfidf-hash>/          # hash of UMAP+HDBSCAN+ctfidf cfg
+          topic_info.parquet
+          topics.parquet                   # final, includes fallback transfer
+          topic_words.parquet
+```
+
+Each layer's hash covers the parameters relevant to *that stage and
+everything upstream*:
+
+- Change `umap_n_neighbors` → new `umap_cfg=<hash>` prefix; whole
+  tree below it re-runs.
+- Change `hdbscan_min_cluster_size` only → same `umap_cfg=` prefix,
+  new `hdbscan_cfg=<hash>` subprefix; UMAP cache reused.
+- Change `vectorizer_max_df` only → same up to `hdbscan_cfg=`, new
+  `ctfidf_cfg=<hash>` subprefix.
+
+### Storage cost over time
+
+| Scenario | Total R2 use | $/month |
+|---|---|---|
+| 1 full fit cached | ~3 GB | $0.05 |
+| 1 UMAP + 5 HDBSCAN re-tunes | ~7 GB | $0.11 |
+| 1 UMAP + 20 HDBSCAN re-tunes | ~19 GB | $0.29 |
+| Add 10 keypaper-swap variants | +1 GB | +$0.02 |
+
+Auto-cleanup via R2 lifecycle rule (30-day TTL on `intermediate/`
+prefix) keeps the bucket from growing unboundedly across months:
+
+```bash
+rclone backend lifecycle r2:tcac-2-0 \
+  set --rule 'prefix=intermediate/,days=30,action=delete'
+```
+
+30 days is a comfortable headroom: anything not touched in a month
+is unlikely to be reused, and lifecycle deletes are async + free.
 
 ### R side: split the target
 
@@ -336,6 +402,106 @@ existing fit: roughly `python -m bertopic_pipeline project-keypapers
 --cached-umap s3://... --cached-hdbscan s3://... --keypaper-emb-dir
 s3://...`. Trivial wrapper around `umap_model.transform()` +
 `hdbscan.approximate_predict()`.
+
+### Named keypaper sets — coexistence on disk
+
+The keypaper-swap workflow assumes prior results stay available for
+comparison ("how do papers identified by the imagination keypaper set
+overlap with those identified by the transformative-change set?"). So
+each keypaper set needs its own persistent output path; runs should
+never overwrite each other.
+
+Mirror the existing `bertopic.configs:` named-config pattern. New
+config block:
+
+```yaml
+keypaper_sets:
+  active_for_viz: tcac_10_original     # which set feeds the current report
+
+  sets:
+    tcac_10_original:
+      source: rds
+      path: input/key papers/key_papers_TCAC_1.0.rds
+      description: |
+        Canonical TCAC 1.0 key papers; ~105 papers.
+
+    imagination_2026:
+      source: json                     # title + abstract list of dicts
+      path: input/key papers/imagination_2026.json
+      description: |
+        Curated set on imagination, social imaginaries, speculative
+        futures. ~50 papers.
+
+    sustainability_2026:
+      source: csv                      # id, title, abstract columns
+      path: input/key papers/sustainability_2026.csv
+      description: |
+        Sustainability transitions corpus seed.
+
+    # Add a new set: drop a json/csv under input/key papers/,
+    # add an entry here, flip active_for_viz, re-run.
+```
+
+Supported input formats:
+
+| Format | Schema | When to use |
+|---|---|---|
+| `.rds` | RDS file containing a character vector or list of DOIs | TCAC 1.0 compatibility; resolved via OpenAlex API for metadata |
+| `.json` | List of `{title: str, abstract: str, doi: str?}` objects | Hand-curated sets where you have the titles/abstracts already |
+| `.csv` | Columns: `id` (DOI or OpenAlex ID), `title`, `abstract` | Spreadsheet-friendly; easy to compile by hand |
+
+For `.json` and `.csv`, the DOI/ID is optional — if absent, the
+keypaper is assigned a synthetic ID like `kpset=imagination_2026/n=42`.
+This lets you score against hypothetical "what if a paper said
+exactly this" definitions, not just real published papers.
+
+### Output layout with named keypaper sets
+
+```
+output/TCAC_2.0/embeddings/config=SPECTER2_runpod/
+  source=keypaper_set=tcac_10_original/variant=…/*.parquet
+  source=keypaper_set=imagination_2026/variant=…/*.parquet
+
+output/TCAC_2.0/scores/config=SPECTER2_runpod/
+  keypaper_set=tcac_10_original/scores_*.parquet
+  keypaper_set=imagination_2026/scores_*.parquet
+
+output/TCAC_2.0/topics/config=SPECTER2_runpod/
+  bertopic=default_runpod/variant=title_abstract/
+    keypaper_set=tcac_10_original/
+      topic_info.parquet                # is_relevant derived from THIS set
+      topics.parquet
+      topic_words.parquet
+    keypaper_set=imagination_2026/
+      topic_info.parquet                # same clusters, different is_relevant
+      topics.parquet
+      topic_words.parquet
+```
+
+Note that under Option A (decouple keypapers from BERTopic fit), the
+*clusters themselves* are identical across keypaper sets — only the
+`is_relevant`, `n_keypapers`, `top_words_by_keypaper_overlap` columns
+differ. The shared expensive bits (UMAP, HDBSCAN, c-TF-IDF on corpus
+text) live one level up; only the cheap "score + tag is_relevant"
+work duplicates per set.
+
+### Comparison view (cross-keypaper-set)
+
+Once two or more sets have results, a comparison target can compute:
+
+```r
+viz_keypaper_set_comparison <- function(topic_info_by_set, ...) {
+  # topic_info_by_set: named list of topic_info data frames
+  # Compare: which clusters are 'relevant' under set A but not set B?
+  #          Jaccard overlap of relevant topic IDs?
+  #          Heatmap: keypaper set (rows) x topic_id (cols), values = n_keypapers?
+}
+```
+
+This is what makes the named-sets pattern pay off — the actual
+research question is "how do different definitions of relevance see
+this corpus?", and that question only exists if you have multiple sets
+on disk.
 
 ### What to design now to enable this later
 
