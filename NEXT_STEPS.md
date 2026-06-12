@@ -81,25 +81,28 @@ Last updated: 2026-06-11.
     set --rule 'prefix=intermediate/,days=30,action=delete'
   ```
 
-- [ ] **Add named `keypaper_sets:` config block**
-  per the new section in
-  [TODO_BERTopicStageCaching.md](TODO_BERTopicStageCaching.md).
-  Supports `.rds`, `.json` (title+abstract), and `.csv` inputs.
-  Each set writes to its own hive-partitioned output path so prior
-  results survive.
+- [ ] **Add named `keypapers:` config block**
+  per [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md).
+  Canonical 4-column schema `(id, doi, title, abstract)` with
+  `id` user-provided and unique; optional DOI for cross-reference;
+  `title`/`abstract` from user OR fetched from OpenAlex when only
+  DOI provided. Supports `.rds`, `.csv`, `.json` inputs. Each set's
+  outputs hive-partitioned under `keypaper_set=<name>/` so prior
+  results coexist.
 
 - [ ] **Build the first new keypaper set**.
   Likely candidates: imagination, sustainability, transformation.
-  Compile manually as JSON (title + abstract) for ~30-50 papers,
-  drop under `input/key papers/`, add to
-  `keypaper_sets.sets:` in config.yaml, run the cheap project +
-  score pipeline.
+  Compile manually as CSV with the 4-column schema for ~30-50
+  papers, drop under `input/key papers/`, add to
+  `keypapers.sets:` in config.yaml, dispatch — should be ~7-10 min
+  on a fresh pod thanks to v0.1.13 R2 stage caching.
 
-- [ ] **Cross-set comparison viz**.
-  Once ≥2 keypaper sets have results, add a comparison target
-  (Jaccard overlap of relevant topic IDs, heatmap of n_keypapers per
-  topic × set, etc.). Already sketched in
-  [TODO_BERTopicStageCaching.md](TODO_BERTopicStageCaching.md).
+- [ ] **Cross-set comparison viz** (later).
+  Once ≥2 keypaper sets have results: Jaccard overlap of relevant
+  topic IDs, heatmap of n_keypapers per topic × set, per-keypaper
+  distance to nearest topic centroid. Sketched in
+  [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md) §"Open
+  questions deferred for later".
 
 ## Optional — implement if/when the pain materialises
 
