@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# Tail the BERTopic pod's persistent log (entrypoint + idle-watchdog output).
+# Tail one of the BERTopic pod's persistent logs.
 #
 # Reads SSH host/port/user/key from config.yaml's
 # bertopic.configs.default_runpod section, so you don't have to retype
 # the connection details every time the pod is redeployed.
 #
-# Note: this log captures entrypoint.sh boot messages and the idle
-# watchdog's heartbeat output, NOT the Python script's BERTopic
-# progress. For "is the workload making progress?", use
-# scripts/pod_watch.sh instead.
+# Three log selectors:
+#   current   /work/bertopic-current.log   — entrypoint + idle-watchdog
+#   previous  /work/bertopic-previous.log  — same but rotated from prior boot
+#   python    /work/python.log             — the GPU script's stdout/stderr
+#                                            (v0.1.12+ wrapper tees it here so
+#                                            it's tailable independently of
+#                                            R's block-buffered SSH stdout)
+#
+# Use 'python' for "is the workload making progress?". Use 'current'
+# only for boot / watchdog state.
 #
 # Usage:
-#   ./scripts/pod_log_tail.sh          # tail current run's log
-#   ./scripts/pod_log_tail.sh previous # tail the rotated log from the prior boot
+#   ./scripts/pod_log_tail.sh           # tail bertopic-current.log
+#   ./scripts/pod_log_tail.sh previous  # tail bertopic-previous.log
+#   ./scripts/pod_log_tail.sh python    # tail python.log (GPU script output)
 set -euo pipefail
 
 if [[ ! -f config.yaml ]]; then
@@ -34,7 +41,8 @@ WHICH="${1:-current}"
 case "${WHICH}" in
     current)  LOG="/work/bertopic-current.log"  ;;
     previous) LOG="/work/bertopic-previous.log" ;;
-    *) echo "Unknown log selector '${WHICH}' (expected 'current' or 'previous')." >&2; exit 2 ;;
+    python)   LOG="/work/python.log"            ;;
+    *) echo "Unknown log selector '${WHICH}' (expected 'current', 'previous', or 'python')." >&2; exit 2 ;;
 esac
 
 LOG_DIR="output/pod_logs"

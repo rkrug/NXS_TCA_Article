@@ -256,8 +256,13 @@ run_bertopic_runpod <- function(
       # Sanity: bail before the long run if creds are missing.
       "[ -n \"${R2_ACCESS_KEY_ID:-}\" ] || { echo 'R2_ACCESS_KEY_ID missing in /proc/1/environ' >&2; exit 2; }; ",
       "[ -n \"${R2_SECRET_ACCESS_KEY:-}\" ] || { echo 'R2_SECRET_ACCESS_KEY missing' >&2; exit 2; }; ",
-      # Then dispatch the GPU script.
-      "python /opt/run_bertopic_gpu.py %s %s %s %s %s"
+      # Then dispatch the GPU script. stdout/stderr are tee'd to
+      # /work/python.log so they can be tailed independently of R's
+      # block-buffered SSH stdout (which can be minutes behind), while
+      # also flowing back to R through the SSH session. The pipeline's
+      # exit code is python's because set -o pipefail is on above, so
+      # the wrapper still gets the correct status when python errors.
+      "python /opt/run_bertopic_gpu.py %s %s %s %s %s 2>&1 | tee /work/python.log"
     ),
     shQuote(remote_root),
     sprintf("--corpus-emb-dir %s",    shQuote(s3_corpus_dir)),
