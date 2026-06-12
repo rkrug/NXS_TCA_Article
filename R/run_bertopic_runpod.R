@@ -262,7 +262,13 @@ run_bertopic_runpod <- function(
       # also flowing back to R through the SSH session. The pipeline's
       # exit code is python's because set -o pipefail is on above, so
       # the wrapper still gets the correct status when python errors.
-      "python /opt/run_bertopic_gpu.py %s %s %s %s %s 2>&1 | tee /work/python.log"
+      #
+      # stdbuf -oL forces tee to line-buffer its outputs. Without it
+      # tee block-buffers (~4-8 KB) when its stdout isn't a TTY (which
+      # it never is over SSH), so /work/python.log stays empty for
+      # minutes between flushes — defeating the whole point of having
+      # a tailable log.
+      "python /opt/run_bertopic_gpu.py %s %s %s %s %s 2>&1 | stdbuf -oL tee /work/python.log"
     ),
     shQuote(remote_root),
     sprintf("--corpus-emb-dir %s",    shQuote(s3_corpus_dir)),
