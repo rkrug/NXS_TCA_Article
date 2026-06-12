@@ -233,7 +233,20 @@ def _r2_exists(client, bucket: str, key: str) -> bool:
 
 
 def _r2_put_bytes(client, bucket: str, key: str, data: bytes) -> None:
-    client.put_object(Bucket=bucket, Key=key, Body=data)
+    # upload_fileobj auto-chunks via multipart (default threshold 8 MB,
+    # part size 8 MB). The cuml.UMAP pickle is 1-3 GB, which a single
+    # client.put_object cannot reliably push to R2 — Cloudflare's TLS
+    # endpoint drops the connection mid-upload (ssl.SSLEOFError) for
+    # large monolithic PUTs. Multipart is also retried per-part on
+    # transient failures, no extra retry logic needed in our code.
+    import boto3.s3.transfer
+    config = boto3.s3.transfer.TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,     # 8 MB
+        multipart_chunksize=64 * 1024 * 1024,    # 64 MB chunks
+        max_concurrency=8,
+        use_threads=True,
+    )
+    client.upload_fileobj(io.BytesIO(data), bucket, key, Config=config)
 
 
 def _r2_get_bytes(client, bucket: str, key: str) -> bytes:

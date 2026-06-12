@@ -7,6 +7,28 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.9 — pending build
+
+Reliability fix: large-object multipart upload to R2.
+
+The first v0.1.8 dispatch completed cuml.UMAP fit on the full 4.6M
+corpus (2091 s = 35 min), then failed when uploading the model
+pickle (~1-3 GB) to R2 with `ssl.SSLEOFError: EOF occurred in
+violation of protocol`. Root cause: `client.put_object` issues a
+single HTTP PUT; R2's TLS endpoint drops large monolithic uploads
+mid-stream. Cloudflare's own R2 docs recommend multipart upload for
+anything > 5 MB.
+
+- **`/opt/run_bertopic_gpu.py`** `_r2_put_bytes`: switch from
+  `client.put_object` to `client.upload_fileobj` with explicit
+  `TransferConfig(multipart_threshold=8 MB, multipart_chunksize=64 MB,
+  max_concurrency=8)`. boto3 chunks the upload into 64 MB parts,
+  uploads them in parallel (8 concurrent), and retries individual
+  parts on transient failure. Total upload time for a 2 GB model
+  goes from "single PUT that randomly fails" to ~20-40 s reliable.
+
+No Dockerfile changes; boto3 already includes the multipart code.
+
 ## v0.1.8 — 2026-06-12 (built + pushed)
 
 Major refactor: BERTopic stage caching on R2.
