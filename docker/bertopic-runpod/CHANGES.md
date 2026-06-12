@@ -7,6 +7,27 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.10 — pending build
+
+Memory-pressure fix in stage_umap.
+
+The first v0.1.9 dispatch OOM'd at ~12 min on a pod with ~80-100 GB
+host RAM during the matrix-extraction phase. Root cause: stage_umap
+holds the full pandas DataFrame (~50-70 GB of text + embeddings) alive
+through `cuml.UMAP.fit_transform`, which itself allocates ~15-20 GB of
+host-side k-NN scratch.
+
+- **`/opt/run_bertopic_gpu.py`** `stage_umap`: extract `ids` + numpy
+  matrix `X` from df_corpus, then `del df_corpus; gc.collect()` BEFORE
+  calling fit_transform. The corpus text isn't needed again until
+  the c-TF-IDF stage, which re-reads it from R2 via duckdb. Drops
+  peak host RAM during UMAP fit from ~100 GB to ~30-40 GB.
+
+Now any pod with ≥60 GB host RAM handles the workload comfortably.
+A100 PCIe 80GB pods that ship with ~80 GB RAM no longer OOM here.
+
+No Dockerfile or entrypoint changes; pure Python script edit.
+
 ## v0.1.9 — pending build
 
 Two reliability fixes folded into one image rebuild.

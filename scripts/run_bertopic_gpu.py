@@ -348,13 +348,23 @@ def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
     print(f"[cache miss] UMAP: s3://{bucket}/{prefix}")
     print("[step] reading corpus primary variant for UMAP fit")
     df_corpus = _read_full_variant_with_text(corpus_root, cl["primary_variant"], r2_cfg)
-    print(f"        loaded {len(df_corpus):,} corpus rows")
+    n_corpus = len(df_corpus)
+    print(f"        loaded {n_corpus:,} corpus rows")
     _heartbeat()
 
-    X = _matrix_from_df(df_corpus)
+    # Extract everything we need from df_corpus, then DROP IT before
+    # cuml.UMAP.fit_transform runs. df_corpus holds title + abstract text
+    # for the whole corpus (~50-70 GB at 4.6M rows); keeping it alive
+    # through fit_transform causes OOM on pods with <120 GB host RAM.
+    # We don't need text again until the c-TF-IDF stage, which re-reads
+    # it from R2 via duckdb. ids + X are all we need for UMAP + downstream.
     ids = df_corpus["id"].astype(str).values
+    X = _matrix_from_df(df_corpus)
+    del df_corpus
+    gc.collect()
+    _heartbeat()
 
-    print(f"[step] cuml.UMAP fit_transform on {len(df_corpus):,} corpus rows")
+    print(f"[step] cuml.UMAP fit_transform on {n_corpus:,} corpus rows")
     from cuml.manifold import UMAP as cumlUMAP
     umap_model = cumlUMAP(
         n_components=int(cl.get("umap_n_components", 5)),
@@ -374,7 +384,7 @@ def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
     umap_coords.insert(0, "id", ids)
 
     # Free large host-side arrays before pickle (cuml model keeps its own GPU copy).
-    del X, df_corpus, umap_arr
+    del X, umap_arr
     gc.collect()
     _heartbeat()
 
