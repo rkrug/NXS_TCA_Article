@@ -509,20 +509,29 @@ viz_umap_fig <- function(emb_corpus, emb_keypaper, contour, best_kp_df,
 
 # ---- 8. Topics ------------------------------------------------------------
 
-viz_topics_table_data <- function(topics_tcac20, embeddings) {
+viz_topics_table_data <- function(topics_tcac20, emb_tcac20_title) {
   topics_dir <- dirname(topics_tcac20)
   topic_info <- arrow::read_parquet(file.path(topics_dir, "topic_info.parquet"))
   topics_df  <- arrow::read_parquet(file.path(topics_dir, "topics.parquet"))
 
+  # Read just (id, title_clean) directly from the corpus title-embedding
+  # leaf. This used to take a unified viz_embeddings input, which forced
+  # a dependency on ALL six emb_* targets (including abstract). Only the
+  # title variant is needed here, so we read it directly — keeps the
+  # target buildable when the abstract variant isn't embedded yet.
+  corpus_titles <- arrow::open_dataset(
+    emb_tcac20_title,                  # leaf_dir directly — embed_works
+                                       # returns the directory, not a file.
+    format = "parquet",
+    factory_options = list(exclude_invalid_files = TRUE)
+  ) |>
+    dplyr::select(id, title_clean) |>
+    dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE)
+
   sample_titles_per_topic <- topics_df |>
     dplyr::filter(source == "corpus") |>
-    dplyr::left_join(
-      embeddings |>
-        dplyr::filter(variant == "title") |>
-        dplyr::select(id, title_clean) |>
-        dplyr::distinct(id, .keep_all = TRUE),
-      by = "id"
-    ) |>
+    dplyr::left_join(corpus_titles, by = "id") |>
     dplyr::filter(!is.na(title_clean)) |>
     dplyr::group_by(topic_id) |>
     dplyr::summarise(

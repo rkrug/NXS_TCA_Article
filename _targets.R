@@ -343,28 +343,16 @@ list(
     format = "file"
   ),
 
-  # Alias for the viz layer so existing viz_topics_* targets don't need
-  # rewiring. Reads bertopic.active_for_viz to pick which run feeds the
-  # report. Side-by-side comparison viz is future work.
-  tar_target(
-    topics_tcac20,
-    {
-      b    <- yaml::read_yaml(config_file)$bertopic
-      pick <- b$active_for_viz
-      if (pick == b$active_local) {
-        topics_tcac20_local
-      } else if (pick == b$active_runpod) {
-        topics_tcac20_runpod
-      } else {
-        stop(
-          "bertopic.active_for_viz ('", pick,
-          "') must equal bertopic.active_local ('", b$active_local,
-          "') or bertopic.active_runpod ('", b$active_runpod, "')."
-        )
-      }
-    },
-    format = "file"
-  ),
+  # NOTE: the previous topics_tcac20 alias target tried to switch
+  # between Path A (topics_tcac20_local) and Path B (topics_tcac20_runpod)
+  # via bertopic.active_for_viz. targets' static dependency analysis
+  # treated BOTH referenced targets as deps regardless of which active
+  # config was selected, so switching active_for_viz to default_runpod
+  # still dispatched Path A. With Path B now the production path, the
+  # viz layer references topics_tcac20_runpod directly. Re-introduce
+  # an alias mechanism only if comparison-across-runs viz is needed
+  # later (see TODO_NamedKeypaperSets.md for the keypaper-set
+  # comparison pattern).
 
   # --- Visualisation layer ---------------------------------------------------
   # Data + figure objects (qs2-serialised) for the report. Each figure target
@@ -480,7 +468,7 @@ list(
   ),
   tar_target(
     viz_topics_tbl_data,
-    viz_topics_table_data(topics_tcac20, viz_embeddings),
+    viz_topics_table_data(topics_tcac20_runpod, emb_tcac20_title),
     format = qs2_format()
   ),
   tar_target(
@@ -491,7 +479,7 @@ list(
   tar_target(
     fig_topics,
     viz_topics_fig(
-      topics_tcac20 = topics_tcac20,
+      topics_tcac20 = topics_tcac20_runpod,
       emb_corpus = viz_umap_join$emb_corpus,
       emb_keypaper = viz_umap_kp
     ),

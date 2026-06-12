@@ -2,7 +2,7 @@
 
 Living checklist of what's next. Updated as items land.
 
-Last updated: 2026-06-11.
+Last updated: 2026-06-12.
 
 ## Short-term — finish current Phase 1 cycle
 
@@ -132,6 +132,23 @@ Last updated: 2026-06-11.
 
 ## Done — most recent first
 
+- [x] **`topics_tcac20` alias removed**. Viz layer now references
+  `topics_tcac20_runpod` directly. The previous alias's dynamic
+  switch via `bertopic.active_for_viz` was a footgun — targets'
+  static dependency analysis treated both Path A and Path B targets
+  as deps, double-dispatching Path A whenever Path B viz was
+  requested. With Path B as the production path, the direct
+  reference is the simplest fix.
+- [x] **`viz_topics_table_data` refactored** to depend on
+  `emb_tcac20_title` instead of `viz_embeddings`. Lets
+  `fig_topics_tbl` build without the abstract embedding (which is
+  parked as a separate task).
+- [x] **v0.1.13 image** (fallback projection cached on R2).
+- [x] **v0.1.12 image** (push c-TF-IDF aggregation into duckdb;
+  fixes OOM on the 117 GB pod).
+- [x] **v0.1.11 image** (text-less corpus read in stage_umap).
+- [x] **v0.1.10 image** (del df_corpus before fit_transform).
+- [x] **v0.1.9 image** (multipart upload + heartbeat self-match fix).
 - [x] **v0.1.8 image** (stage caching + BERTopic-bypass) — pending build.
 - [x] **v0.1.7 image** (external bash heartbeat keeper, GIL-immune) — `a46a261`.
 - [x] **v0.1.6 image** (PYTHONUNBUFFERED=1 for real-time log flushing) — `dba7af2`.
