@@ -31,13 +31,8 @@ score_keypapers <- function(
     dplyr::filter(source == "keypaper", variant == variant_filter) |>
     dplyr::select(id, dplyr::starts_with("V")) |>
     dplyr::collect()
-  cor <- ds |>
-    dplyr::filter(source == "corpus", variant == variant_filter) |>
-    dplyr::select(id, dplyr::starts_with("V")) |>
-    dplyr::collect()
 
   if (nrow(ref) == 0L) stop("No keypaper embeddings for variant: ", variant)
-  if (nrow(cor) == 0L) stop("No corpus embeddings for variant: ",    variant)
 
   vcols <- grep("^V[0-9]+$", names(ref), value = TRUE)
   vcols <- vcols[order(as.integer(sub("^V", "", vcols)))]
@@ -48,24 +43,28 @@ score_keypapers <- function(
     m / n
   }
 
-  R <- normalize_rows(as.matrix(ref[, vcols, drop = FALSE]))
-  C <- normalize_rows(as.matrix(cor[, vcols, drop = FALSE]))
+  R  <- normalize_rows(as.matrix(ref[, vcols, drop = FALSE]))
+  Rt <- t(R)
+  ref_ids <- as.character(ref$id)
+  rm(R, ref); gc()
 
-  sims <- C %*% t(R)
-  dist <- 1 - sims
-
-  if (method == "exponential") {
-    score <- exp(-alpha * dist)
-  } else {
-    score <- 1 - dist
-  }
-
-  out <- as.data.frame(score, stringsAsFactors = FALSE, check.names = FALSE)
-  colnames(out) <- as.character(ref$id)
-  out <- cbind(
-    data.frame(id = as.character(cor$id), stringsAsFactors = FALSE),
-    out
+  # Stream the corpus side: open each parquet file under
+  # source=corpus/variant=<variant>/ separately to keep peak memory bounded.
+  # Each embed_works batch file is ~50-100k rows, so a chunk's matmul against
+  # ~10^2 keypapers stays in the low-GB range.
+  corpus_dir <- file.path(
+    embeddings_db, "source=corpus", paste0("variant=", variant)
   )
+  if (!dir.exists(corpus_dir)) {
+    stop("No corpus embeddings directory for variant: ", variant,
+         " (looked under ", corpus_dir, ")")
+  }
+  corpus_files <- list.files(
+    corpus_dir, pattern = "\\.parquet$", full.names = TRUE, recursive = TRUE
+  )
+  if (length(corpus_files) == 0L) {
+    stop("No corpus parquet files for variant: ", variant)
+  }
 
   out_file <- file.path(
     out_dir,
@@ -74,6 +73,31 @@ score_keypapers <- function(
     "pairwise-cosine.parquet"
   )
   dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
+
+  chunks <- vector("list", length(corpus_files))
+  for (i in seq_along(corpus_files)) {
+    ch <- arrow::read_parquet(
+      corpus_files[[i]], col_select = c("id", dplyr::all_of(vcols))
+    )
+    C  <- normalize_rows(as.matrix(ch[, vcols, drop = FALSE]))
+    sims <- C %*% Rt
+    if (method == "exponential") {
+      score <- exp(-alpha * (1 - sims))
+    } else {
+      score <- sims
+    }
+    chunk_out <- as.data.frame(score, stringsAsFactors = FALSE,
+                               check.names = FALSE)
+    colnames(chunk_out) <- ref_ids
+    chunk_out <- cbind(
+      data.frame(id = as.character(ch$id), stringsAsFactors = FALSE),
+      chunk_out
+    )
+    chunks[[i]] <- chunk_out
+    rm(ch, C, sims, score, chunk_out); gc()
+  }
+  out <- dplyr::bind_rows(chunks)
+  rm(chunks); gc()
   arrow::write_parquet(out, out_file)
 
   out_file

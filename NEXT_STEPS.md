@@ -4,6 +4,41 @@ Living checklist of what's next. Updated as items land.
 
 Last updated: 2026-06-12.
 
+## 🚨 URGENT — first Path B BERTopic fit collapsed
+
+The completed v0.1.13 full-corpus run produced **only 6 topics**, with
+topic 3 absorbing 99% of the corpus:
+
+```
+topic 3: 4,564,627 primary + 1,161,334 fallback + 105 keypapers
+         = 5,726,066 of 5,768,257 works (~99%)
+nrow(topic_info) = 6
+```
+
+Vocabulary for topic 3 is generic corpus-wide (water, species, climate,
+soil, economic, …) — diagnostic of a collapsed clustering, not a
+meaningful topic. Fallback inherits the dominant cluster, so the
+problem is in the **primary HDBSCAN fit**, not the fallback projection.
+
+Likely root cause: UMAP+HDBSCAN params from `default_runpod` don't hold
+up at 5.77 M scale. `hdbscan_min_cluster_size: 500` plus the current
+UMAP settings probably collapsed the embedding into one dominant blob.
+
+Next diagnostic step before retuning:
+
+1. Inspect the UMAP 2D projection (`fig_umap` / `viz_umap_*`) — does it
+   show structure or one blob? That tells us whether UMAP or HDBSCAN
+   is the culprit.
+2. If UMAP looks fine → bump `hdbscan_min_cluster_size` down (200?
+   100?) and/or `min_samples` down.
+3. If UMAP collapsed → retune `umap_n_neighbors` (try 50-100) and
+   `umap_min_dist` (try 0.1).
+
+Retune does NOT require image rebuild — just a new bertopic config
+entry under `bertopic.configs:` and a dispatch. v0.1.13 stage caching
+won't help here (cfg-hash changes invalidate UMAP+HDBSCAN+c-TF-IDF
+caches), so retune cost ≈ full pod run (~50 min).
+
 ## Short-term — finish current Phase 1 cycle
 
 - [ ] **Wait for first Path B BERTopic run to complete.**
@@ -40,7 +75,7 @@ Last updated: 2026-06-12.
   - [ ] Re-render
     [TCAC 2.0 Vectorisation.qmd](TCAC 2.0 Vectorisation.qmd) with the
     Path B topics. Confirm `viz_score_quantiles_tbl`, `fig_score_dist`,
-    `fig_threshold`, `fig_umap`, `fig_topics`, `fig_topics_tbl` all
+    `fig_threshold`, `fig_umap`, `fig_topics`, `tbl_topics` all
     render cleanly with the new data.
   - [ ] Re-render
     [TCAC 2.0 Building.qmd](TCAC 2.0 Building.qmd) including the new
@@ -114,6 +149,16 @@ Last updated: 2026-06-12.
   one stage's compute); this would shrink that to "zero loss".
   ~1 day of work, no image rebuild required (R wrapper only).
   Trigger criteria documented in the TODO.
+
+## Conceptual — what the figures should say
+
+- [ ] **Visualisation principles + backlog**
+  ([TODO_Visualisations.md](TODO_Visualisations.md)).
+  Captures the design decisions that need to be made before adding
+  more figures: shared coordinate system, fig_/tbl_ convention,
+  replacing `viz_scores_long`, when to wire density+polygon viz,
+  cross-keypaper-set viz design, variant-agreement keep-or-drop,
+  interactive vs static deliverables.
 
 ## Deferred — not on roadmap, kept for reference
 

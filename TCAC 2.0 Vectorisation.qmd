@@ -218,7 +218,7 @@ set.
 
 ```{r}
 #| label: tbl-topics
-tbl <- tar_read(fig_topics_tbl) |>
+tbl <- tar_read(tbl_topics) |>
   DT::formatStyle(
     columns = 6, # column index (1-based here)
     fontSize = '60%' # or '80%', '0.8em', etc.

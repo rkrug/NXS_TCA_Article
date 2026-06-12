@@ -90,7 +90,7 @@ When the local Metal GPU is too slow, host TEI on a rented RunPod A100/H100.
 4. **Flip `config.yaml`**: copy the commented `SPECTER2_runpod:` template into
    the `embeddings:` block, fill in `host` (e.g.
    `<pod-id>-8080.proxy.runpod.net`), and set
-   `active_embedding: SPECTER2_runpod`. The new keys are `scheme: https` and
+   `embeddings.active: SPECTER2_runpod`. The new keys are `scheme: https` and
    `auth_token_keyring: API_TEI`; `build_tei_backend()` in `R/embed_works.R`
    picks them up.
 5. **Verify**:

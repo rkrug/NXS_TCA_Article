@@ -258,15 +258,43 @@ viz_threshold_fig <- function(scores_long, figures_dir = "output/figures") {
 
 # ---- 6. UMAP coords (used by both interactive UMAP and topics UMAP) --------
 
-viz_umap_coords <- function(embeddings, variant = "title_abstract", seed = 13L) {
-  emb <- embeddings |>
-    dplyr::filter(variant == !!variant) |>
-    dplyr::select(id, source, dplyr::starts_with("V"))
+viz_umap_coords <- function(emb_tcac20_title_abstract,
+                            emb_keypapers_title_abstract,
+                            viz_cfg) {
+  seed        <- viz_cfg$umap_seed        %||% 13L
+  sample_size <- viz_cfg$umap_sample_size %||% 50000L
+  n_neighbors <- viz_cfg$umap_n_neighbors %||% 15L
+  min_dist    <- viz_cfg$umap_min_dist    %||% 0.1
+  metric      <- viz_cfg$umap_metric      %||% "cosine"
+
+  read_one <- function(leaf, source, n = NULL) {
+    ds <- arrow::open_dataset(leaf)
+    ids <- ds |> dplyr::select(id) |> dplyr::collect()
+    if (!is.null(n) && nrow(ids) > n) {
+      set.seed(seed)
+      keep_ids <- ids$id[sample.int(nrow(ids), n)]
+      df <- ds |>
+        dplyr::filter(id %in% keep_ids) |>
+        dplyr::select(id, dplyr::starts_with("V")) |>
+        dplyr::collect()
+    } else {
+      df <- ds |>
+        dplyr::select(id, dplyr::starts_with("V")) |>
+        dplyr::collect()
+    }
+    df$source <- source
+    df
+  }
+  emb <- dplyr::bind_rows(
+    read_one(emb_tcac20_title_abstract,    "corpus",   sample_size),
+    read_one(emb_keypapers_title_abstract, "keypaper", NULL)
+  )
   vcols <- grep("^V[0-9]+$", names(emb), value = TRUE)
   vcols <- vcols[order(as.integer(sub("^V", "", vcols)))]
   M <- as.matrix(emb[, vcols, drop = FALSE])
   set.seed(seed)
-  u <- uwot::umap(M, n_neighbors = 15, min_dist = 0.1, metric = "cosine")
+  u <- uwot::umap(M, n_neighbors = n_neighbors, min_dist = min_dist,
+                  metric = metric)
   tibble::tibble(
     id = emb$id, source = emb$source,
     x  = u[, 1], y = u[, 2]
@@ -275,16 +303,36 @@ viz_umap_coords <- function(embeddings, variant = "title_abstract", seed = 13L) 
 
 # ---- 7. Interactive UMAP --------------------------------------------------
 
-viz_umap_data <- function(umap_coords, embeddings, scores_long,
+viz_umap_data <- function(umap_coords,
+                          emb_tcac20_title, emb_keypapers_title,
+                          scores_tcac20_title_abstract,
                           corpus_tcac20, key_works,
                           variant = "title_abstract") {
-  max_sim_per_id <- scores_long |>
-    dplyr::filter(variant == !!variant) |>
-    dplyr::summarise(max_sim = max(score, na.rm = TRUE), .by = id)
+  # Compute max-similarity per id by filtering the scores parquet down to
+  # the sampled UMAP ids first (pushdown). Avoids materialising the full
+  # ~5.77M × 105 wide -> long pivot.
+  keep_ids <- umap_coords |>
+    dplyr::filter(source == "corpus") |>
+    dplyr::pull(id)
+  variant_filter <- variant
+  scored <- arrow::open_dataset(
+    file.path(scores_tcac20_title_abstract, "..", "..")
+  ) |>
+    dplyr::filter(variant == variant_filter, id %in% keep_ids) |>
+    dplyr::collect()
+  score_cols <- grep("^https://", names(scored), value = TRUE)
+  max_sim_per_id <- tibble::tibble(
+    id      = scored$id,
+    max_sim = apply(as.matrix(scored[, score_cols, drop = FALSE]),
+                    1, max, na.rm = TRUE)
+  )
 
-  title_per_id <- embeddings |>
-    dplyr::filter(variant == "title") |>
-    dplyr::select(id, title_clean) |>
+  title_per_id <- dplyr::bind_rows(
+    arrow::open_dataset(emb_tcac20_title) |>
+      dplyr::select(id, title_clean) |> dplyr::collect(),
+    arrow::open_dataset(emb_keypapers_title) |>
+      dplyr::select(id, title_clean) |> dplyr::collect()
+  ) |>
     dplyr::distinct(id, .keep_all = TRUE)
 
   citation_per_id <- dplyr::bind_rows(
@@ -509,7 +557,7 @@ viz_umap_fig <- function(emb_corpus, emb_keypaper, contour, best_kp_df,
 
 # ---- 8. Topics ------------------------------------------------------------
 
-viz_topics_table_data <- function(topics_tcac20, emb_tcac20_title) {
+build_tbl_topics_data <- function(topics_tcac20, emb_tcac20_title) {
   topics_dir <- dirname(topics_tcac20)
   topic_info <- arrow::read_parquet(file.path(topics_dir, "topic_info.parquet"))
   topics_df  <- arrow::read_parquet(file.path(topics_dir, "topics.parquet"))
@@ -551,7 +599,7 @@ viz_topics_table_data <- function(topics_tcac20, emb_tcac20_title) {
     )
 }
 
-viz_topics_table <- function(topics_table_data, figures_dir = "output/figures") {
+tbl_topics_widget <- function(topics_table_data, tables_dir = "output/tables") {
   w <- DT::datatable(
     topics_table_data,
     rownames = FALSE,
@@ -562,7 +610,7 @@ viz_topics_table <- function(topics_table_data, figures_dir = "output/figures") 
     ),
     caption = "Topics ranked by keypaper density. is_relevant = (n_keypapers >= keypaper_threshold)."
   )
-  save_widget_html(w, "topics_table", figures_dir)
+  save_widget_html(w, "tbl_topics", tables_dir)
   w
 }
 

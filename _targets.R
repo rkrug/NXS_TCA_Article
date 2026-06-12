@@ -16,13 +16,13 @@ lapply(list.files("R", pattern = "\\.R$", full.names = TRUE), source)
 # Operational config — not tracked, changes do not invalidate targets
 cfg <- yaml::read_yaml("config.yaml")
 workers <- cfg$workers
-emb_name <- cfg$active_embedding
-emb_cfg <- cfg$embeddings[[emb_name]]
+emb_name <- cfg$embeddings$active
+emb_cfg <- cfg$embeddings$configs[[emb_name]]
 if (is.null(emb_cfg)) {
   stop(
-    "active_embedding '",
+    "embeddings.active '",
     emb_name,
-    "' not found under embeddings: in config.yaml"
+    "' not found under embeddings.configs in config.yaml"
   )
 }
 # Sys.setenv(OVC_API_TOKEN = keyring::key_get("API_openai"))  # only when provider == openai
@@ -279,6 +279,14 @@ list(
   # sections (workers, embedding params) do not invalidate them.
   tar_target(config_file, "config.yaml", format = "file"),
   tar_target(
+    viz_cfg,
+    {
+      v <- yaml::read_yaml(config_file)$viz
+      if (is.null(v)) stop("viz: block missing from config.yaml")
+      v
+    }
+  ),
+  tar_target(
     bertopic_local_cfg,
     {
       b <- yaml::read_yaml(config_file)$bertopic
@@ -421,15 +429,20 @@ list(
   ),
   tar_target(
     viz_umap_coords_df,
-    viz_umap_coords(viz_embeddings, variant = "title_abstract"),
+    viz_umap_coords(
+      emb_tcac20_title_abstract,
+      emb_keypapers_title_abstract,
+      viz_cfg = viz_cfg
+    ),
     format = qs2_format()
   ),
   tar_target(
     viz_umap_join,
     viz_umap_data(
       umap_coords = viz_umap_coords_df,
-      embeddings = viz_embeddings,
-      scores_long = viz_scores_long,
+      emb_tcac20_title = emb_tcac20_title,
+      emb_keypapers_title = emb_keypapers_title,
+      scores_tcac20_title_abstract = scores_tcac20_title_abstract,
       corpus_tcac20 = corpus_tcac20,
       key_works = key_works
     ),
@@ -467,13 +480,13 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    viz_topics_tbl_data,
-    viz_topics_table_data(topics_tcac20_runpod, emb_tcac20_title),
+    tbl_topics_data,
+    build_tbl_topics_data(topics_tcac20_runpod, emb_tcac20_title),
     format = qs2_format()
   ),
   tar_target(
-    fig_topics_tbl,
-    viz_topics_table(viz_topics_tbl_data),
+    tbl_topics,
+    tbl_topics_widget(tbl_topics_data),
     format = qs2_format()
   ),
   tar_target(
