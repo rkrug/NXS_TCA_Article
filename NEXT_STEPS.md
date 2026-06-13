@@ -4,6 +4,71 @@ Living checklist of what's next. Updated as items land.
 
 Last updated: 2026-06-12.
 
+## ⏸ Parked — `emb_tcac20_abstract` consolidation failed (disk full)
+
+Picking up in ~a week (2026-06-13 + 1w). Symptom + state captured here so
+we don't have to re-derive it from logs.
+
+**What ran:** `tar_make("emb_tcac20_abstract")` — the abstract variant of
+the corpus, ~4.6 M rows, on the RunPod TEI pod at 161.5 docs/s average
+(low end — same client-bottleneck pattern as title).
+
+**Embedding stage succeeded:**
+
+```
+Done. embedded=4,605,817 rows in 1220 shards, 28520.1s total (161.5 docs/s avg).
+[corpus|abstract] consolidating scratch shards into ~1 GB part-NNNN.parquet chunks via duckdb COPY
+```
+
+**Then consolidation failed:**
+
+```
+✖ emb_tcac20_abstract errored
+✖ errored pipeline [7h 59m 10.1s, 1 completed, 9 skipped]
+Error:
+! Error in tar_make():
+  Invalid Error: IO Error: Could not write file
+  "output/TCAC_2.0/embeddings/config=SPECTER2_runpod/source=corpus/variant=abstract/.parts.tmp/part-20.parquet":
+  No space left on device
+ℹ Context: rapi_execute
+ℹ Error type: INVALID
+```
+
+**Disk state at failure** (2026-06-13):
+
+- `output/TCAC_2.0/embeddings/config=SPECTER2_runpod/` total: 110 GB
+- `variant=abstract` (scratch + partial consolidated): 35 GB
+- Free on `/System/Volumes/Data`: 71 GiB
+- Consolidation roughly doubles disk use during the COPY (scratch
+  shards still on disk + new `.parts.tmp/part-*.parquet` being written),
+  which is why it ran out at part-20.
+
+**On disk now** (untouched per user request):
+
+- `variant=abstract/<scratch shards>/` — embedding output, complete.
+- `variant=abstract/.parts.tmp/part-0.parquet … part-19.parquet` —
+  incomplete consolidation. Safe to delete on resume; consolidation
+  starts from scratch each time.
+
+**Resume options** (already enumerated, no action taken):
+
+1. Free ~35 GB elsewhere on the laptop, delete `.parts.tmp/`, re-run
+   `tar_make("emb_tcac20_abstract")` — only the consolidation re-runs;
+   the embedding work is preserved.
+2. Sync `title` + `title_abstract` corpus variants to R2 and delete
+   them locally (~75 GB freed). Caveat: viz layer reads local parquet,
+   so `fig_umap`/`fig_topics` etc. would break until local copies are
+   restored (or the viz layer is rewired to read R2).
+3. Skip consolidation; leave abstract as scratch shards.
+   `arrow::open_dataset()` reads both forms. Would need to confirm
+   `embed_works()` can mark the variant complete without consolidating
+   (probably needs a small wrapper change).
+
+**Reminder of the prior policy:** the abstract variant stays *local*
+only — do not sync it to R2. It exists for the laptop-side
+variant-agreement figures (`fig_agree`, top/bottom tables, score-dist
+across variants). Path B BERTopic doesn't consume it.
+
 ## 🚨 URGENT — first Path B BERTopic fit collapsed
 
 The completed v0.1.13 full-corpus run produced **only 6 topics**, with
