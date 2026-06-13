@@ -45,10 +45,13 @@ Error:
 
 **On disk now** (untouched per user request):
 
-- `variant=abstract/<scratch shards>/` — embedding output, complete.
+- **All 4,605,817 abstract embeddings are present as scratch shards.**
+  No compute is lost. The 8-hour TEI run does **not** need to be
+  re-done. Only the final post-processing (consolidation into ~1 GB
+  parquet chunks) failed.
 - `variant=abstract/.parts.tmp/part-0.parquet … part-19.parquet` —
-  incomplete consolidation. Safe to delete on resume; consolidation
-  starts from scratch each time.
+  incomplete consolidation output. Safe to delete on resume;
+  consolidation starts from scratch each time.
 
 **Resume options** (already enumerated, no action taken):
 
