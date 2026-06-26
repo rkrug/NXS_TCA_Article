@@ -18,7 +18,7 @@ Currently the figures are inconsistent in what they encode. Before adding
 more, pick a small set of conventions and apply them everywhere:
 
 1. **One scatter coordinate system** for everything spatial.
-   All UMAP-style figures (`fig_umap`, `fig_umap_clusters`, future
+   All UMAP-style figures (`viz_umap_fig`, `viz_umap_clusters_fig`, future
    per-set views) should share the same 2D embedding. Right now
    `viz_umap_coords` fits a fresh UMAP per build; it should be a cached
    target keyed on its inputs so successive figures sit in the same
@@ -48,14 +48,14 @@ more, pick a small set of conventions and apply them everywhere:
 
 | Figure / table | Target | State | Notes |
 |---|---|---|---|
-| Score density | `fig_score_dist` | OOM-prone | needs `viz_scores_long` (5.77M × 105 → 600M-row long form) |
-| Threshold | `fig_threshold` | OOM-prone | same dependency |
-| Variant agreement | `fig_agree` | OOM-prone | same; also needs all three variants embedded |
+| Score density | `viz_score_dist_fig` | OOM-prone | needs `viz_scores_long` (5.77M × 105 → 600M-row long form) |
+| Threshold | `viz_threshold_fig` | OOM-prone | same dependency |
+| Variant agreement | `viz_agree_fig` | OOM-prone | same; also needs all three variants embedded |
 | Top/bottom matches | `viz_top_bottom` | OOM-prone | same |
 | Score summary table | `viz_score_summary_tbl` | OOM-prone | same |
 | Score quantiles table | `viz_score_quantiles_tbl` | OOM-prone | same |
-| UMAP scatter | `fig_umap` | **unblocked** | now reads scores via pushdown for the sampled ids only |
-| UMAP topics overlay | `fig_topics` | **unblocked** | same |
+| UMAP scatter | `viz_umap_fig` | **unblocked** | now reads scores via pushdown for the sampled ids only |
+| UMAP topics overlay | `viz_topics_fig` | **unblocked** | same |
 | Topics table | `tbl_topics` | **unblocked** | reads `emb_tcac20_title` directly |
 | Density + polygons | `viz_umap_clusters_fig` | **not wired** | function exists in `R/build_visualisations.R`; needs tar_target + inputs `viz_umap_density`, `viz_umap_hulls`, `viz_umap_cluster_pts`. Don't wire until BERTopic fit is fixed (current 6-topic collapse would render as one giant polygon). |
 | Variant-agreement figures | several | deferred | abstract-only variant not embedded yet; not on R2 either ([NEXT_STEPS.md](NEXT_STEPS.md)). |
@@ -88,7 +88,7 @@ both are in place.
 
 ### 2. How do we visualise cluster collapse vs success?
 
-Diagnostic for `fig_umap` retunes: a small per-topic count histogram is
+Diagnostic for `viz_umap_fig` retunes: a small per-topic count histogram is
 enough to spot collapse (one bar dwarfs all others). Useful in the
 report as a methodology check ("topic-size distribution shows X% of the
 corpus in topic Y; HDBSCAN considers this a single cluster") — but only
@@ -141,7 +141,7 @@ exploration during writing. Make the split explicit:
 - A parallel `interactive_*` set of targets renders the HTML widget
   versions for exploration.
 
-Right now `fig_topics_table` produces an HTML widget into
+Right now `tbl_topics` produces an HTML widget into
 `output/figures/` and the report embeds it. That's fine for an HTML
 report but won't survive a PDF render. Pick the deliverable form
 before adding more figures.

@@ -2,7 +2,7 @@ run_bertopic <- function(
   corpus_emb_dir,
   reference_emb_dir,
   out_dir,
-  cfg_path = "config.yaml",
+  cfg_path = "input/config.yaml",
   ...   # ignored — used by _targets.R to declare extra DAG deps
         # (clustering_cfg, fallback_corpus, fallback_ref)
 ) {

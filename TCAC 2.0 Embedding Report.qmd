@@ -1,0 +1,420 @@
+---
+title: "TCAC 2.0 — Vectorisation Report"
+subtitle: "SPECTER2 embeddings, keypaper-similarity scoring"
+author:
+  - name:
+      family: Krug
+      given: Rainer M.
+    id: rmk
+    orcid: 0000-0002-7490-0066
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 9
+    fig-height: 5
+    grid:
+        sidebar-width: 0px
+        body-width: 4000px
+        margin-width: 200px
+        gutter-width: 1.5rem      
+execute:
+  message: false
+  warning: false
+  cache: false
+---
+
+```{r}
+#| label: setup
+library(targets)
+library(htmltools)
+library(knitr)
+```
+
+
+# Embeddings Overview
+The corpus contains the following missing titles and abstracts
+
+```{r}
+#| label: tbl-missing-titles
+ds <- arrow::open_dataset(tar_read(corpus_tcac20))
+n_total <- nrow(ds)
+n_na <- ds |> dplyr::filter(is.na(title)) |> nrow()
+n_empty <- ds |> dplyr::filter(!is.na(title), title == "") |> nrow()
+n_present <- n_total - n_na - n_empty
+
+tibble::tibble(
+  state = c("title present", "title empty (nchar=0)", "title NA", "total"),
+  n = c(n_present, n_empty, n_na, n_total)
+) |>
+  dplyr::mutate(`%` = 100 * n / n_total) |>
+  knitr::kable(
+    digits = 3,
+    format.args = list(big.mark = ",", nsmall = 3),
+    align = c("l", "r", "r"),
+    caption = "Title presence in the OpenAlex corpus extract. Works in NA or empty rows are dropped from the title-variant embedding by preprocessor_title()."
+  )
+```
+
+```{r}
+#| label: tbl-missing-abstracts
+ds <- arrow::open_dataset(tar_read(corpus_tcac20))
+n_total <- nrow(ds)
+n_na <- ds |> dplyr::filter(is.na(abstract)) |> nrow()
+n_empty <- ds |> dplyr::filter(!is.na(abstract), abstract == "") |> nrow()
+n_present <- n_total - n_na - n_empty
+
+tibble::tibble(
+  state = c(
+    "abstract present",
+    "abstract empty (nchar=0)",
+    "abstract NA",
+    "total"
+  ),
+  n = c(n_present, n_empty, n_na, n_total)
+) |>
+  dplyr::mutate(`%` = 100 * n / n_total) |>
+  knitr::kable(
+    digits = 3,
+    format.args = list(big.mark = ",", nsmall = 3),
+    align = c("l", "r", "r"),
+    caption = "Abstract presence in the OpenAlex corpus extract. Works without abstracts are dropped from the abstract and title_abstract variants."
+  )
+```
+
+The following number of embeddings were determined.
+
+```{r}
+#| label: metadata
+# Embeddings root holds multiple config=<name>/ partitions
+
+emb_meta <- dirname(dirname(dirname(tar_read(emb_tcac20_title)))) |>
+  arrow::open_dataset() |>
+  dplyr::count(config, source, variant) |>
+  dplyr::collect() |>
+  tidyr::pivot_wider(names_from = variant, values_from = n, values_fill = 0L) |>
+  dplyr::relocate(
+    dplyr::any_of(c("title", "abstract", "title_abstract")),
+    .after = source
+  ) |>
+  dplyr::arrange(config, source)
+
+
+# Total works available per source (before embedding)
+n_corpus <- nrow(arrow::open_dataset(tar_read(corpus_tcac20)))
+n_keypaper <- nrow(arrow::open_dataset(tar_read(key_works)))
+
+emb_meta <- emb_meta |>
+  dplyr::mutate(
+    corpus_size = dplyr::if_else(source == "corpus", n_corpus, n_keypaper)
+  ) |>
+  dplyr::arrange(config, source) |>
+  dplyr::mutate(
+    corpus_size = dplyr::if_else(source == "corpus", n_corpus, n_keypaper)
+  ) |>
+  dplyr::relocate(corpus_size, .after = source)
+
+# Map config name → model_id for the caption
+cfg <- yaml::read_yaml("input/config.yaml")
+active_cfg <- cfg$embeddings$active
+model_ids <- vapply(
+  cfg$embeddings$configs,
+  function(c) c$model %||% NA_character_,
+  character(1)
+)
+
+knitr::kable(
+  emb_meta,
+  format.args = list(big.mark = ","),
+  caption = sprintf(
+    "Embedded works per config × source × variant. Active config: %s (model_id = %s).",
+    active_cfg,
+    model_ids[[active_cfg]]
+  )
+)
+```
+
+## Language distribution
+
+SPECTER2 is a primarily English model; non-English works can still
+embed but their similarity scores are less reliable. Useful gut-check
+on how much of the corpus the embedding is well-suited for.
+
+```{r}
+#| label: fig-language
+#| fig-cap: "Works per OpenAlex `language`, log x-axis. Blue bars = ≥ 0.5% of the corpus; grey = long tail. SPECTER2 was trained primarily on English; treat similarity scores for low-resource languages with caution."
+tar_read(viz_language_fig)
+```
+
+## Input text length per variant
+
+How long is the text actually sent to TEI? `title_abstract` is capped on
+the title side at `title_cap_combined` chars (config), then joined with
+the abstract via `[SEP]`. Works far above ~2000 chars may hit the model's
+512-token context window and get silently truncated server-side.
+
+```{r}
+#| label: fig-text-length
+#| fig-cap: "Distribution of input text length per variant (characters, log scale). Title is by definition short; abstract dominates the right tail; title_abstract is title (capped) + sep + abstract."
+tar_read(viz_text_length_fig)
+```
+
+### Silent truncation by TEI
+
+SPECTER2 truncates input above ~512 tokens (~2,000 characters)
+**without warning**. Embeddings for truncated works are based only on
+the first 2k characters of text — methodologically worth surfacing.
+
+```{r}
+#| label: tbl-truncation
+tar_read(viz_truncation_stats) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = "Number of works exceeding length thresholds per variant. The `> 2048` column approximates how many were silently truncated by TEI."
+  )
+```
+
+
+# Score distributions per variant
+
+For each corpus work, the **max** cosine similarity against any keypaper is the
+single most useful summary — it answers "how close is this work to its nearest
+reference paper?" A well-calibrated embedding produces a bimodal distribution:
+relevant works pile up on the right, irrelevant on the left.
+
+```{r}
+#| label: tbl-score-summary
+tar_read(viz_score_summary_tbl) |>
+  knitr::kable(
+    caption = "Summary statistics of the embeddings, split by source of embedding.",
+    format.args = list(big.mark = ","),
+  )
+```
+
+```{r}
+#| label: fig-score-dist
+#| fig-cap: "Distribution of max cosine similarity to keypapers, per variant. Higher = closer to nearest reference. A clear bimodal shape indicates the embedding separates topic-relevant from off-topic works."
+tar_read(viz_score_dist_fig)
+```
+
+```{r}
+#| label: fig-score-ecdf
+#| fig-cap: "Empirical CDF of max cosine similarity to nearest keypaper, per variant (subsample of 50,000 works per variant, seed = 13). Read horizontally: for any score threshold, the curves give the fraction of works at or below that score. The gap between curves shows where variants disagree about how 'close to relevant' a typical work is."
+tar_read(viz_score_ecdf_fig)
+```
+
+## Score vs publication year
+
+Does similarity to keypapers correlate with how recent a work is? A
+strong bias either way suggests the keypaper set is anchored to a
+particular era and may need broadening.
+
+```{r}
+#| label: fig-score-year
+#| fig-cap: "2D histogram of max cosine similarity (y) against publication year (x), per variant. Log-scale fill reveals the tail; uniform vertical density at every year is the null-hypothesis appearance — the keypaper set has no temporal bias."
+tar_read(viz_score_year_fig)
+```
+
+## Score vs citation count
+
+Are high-similarity works also highly cited? Topical relevance and
+citation impact are different signals — a strong correlation here would
+suggest the embedding is mostly picking up "prestige", not topic.
+
+```{r}
+#| label: fig-citation-score
+#| fig-cap: "2D histogram of max cosine similarity (y) against log10(cited_by_count + 1) (x), per variant. A horizontal band = no relationship between citation and similarity (good — they're independent signals). Diagonal correlation would suggest the embedding co-varies with citation impact rather than topic."
+tar_read(viz_citation_score_fig)
+```
+
+# Work-type breakdown
+
+The OpenAlex corpus contains 19 work types — overwhelmingly `article`,
+plus reviews, book chapters, preprints and a long tail of small types
+(letters, errata, paratext, …). Counts per type set the baseline; score
+distributions per type say whether the embedding treats them
+differently.
+
+```{r}
+#| label: fig-type-counts
+#| fig-cap: "Number of works per OpenAlex `type`, log x-axis. Blue bars = types representing ≥ 0.5% of the corpus (kept for the score plots below); grey = long-tail types (still shown here for context)."
+tar_read(viz_type_count_fig)
+```
+
+```{r}
+#| label: fig-type-score-heatmap
+#| fig-cap: "Median max-similarity score per (type, variant), for types with ≥ 0.5% of the corpus. Cells annotated with `median (n=…)`. Types sorted by overall median — top of the column scores best."
+tar_read(viz_type_score_heatmap_fig)
+```
+
+```{r}
+#| label: fig-type-score-box
+#| fig-cap: "Score distribution per type, per variant. Boxes show q05–q25–median–q75–q95 (precomputed). Filtered to types with ≥ 0.5% of the corpus. Variant facets share the y-axis; spread within a type indicates how heterogeneous its content is."
+tar_read(viz_type_score_box_fig)
+```
+
+# Top / bottom matches per variant
+
+Sanity check: do the highest-scoring works read as on-topic, and the lowest as
+off-topic? If not, either the embedding model isn't capturing the topic, the
+keypaper set is too narrow, or the search-term filter let in noise.
+
+```{r}
+#| label: tbl-top-bottom
+#| results: asis
+tb <- tar_read(viz_top_bottom)
+for (v in names(tb)) {
+  cat("##", v, "\n\n")
+  print(knitr::kable(tb[[v]]))
+  cat("\n\n")
+}
+```
+
+## Top matches per keypaper
+
+Concrete embedding sanity check: for five randomly-chosen keypapers
+(seed = 13), the five corpus works with the highest cosine similarity
+under the `title_abstract` variant. The matches should read as
+topically related to the keypaper.
+
+```{r}
+#| label: tbl-top-matches-per-kp
+#| results: asis
+tm <- tar_read(viz_top_matches_per_kp)
+for (kp in unique(tm$keypaper_id)) {
+  rows <- tm[tm$keypaper_id == kp, ]
+  title <- rows$keypaper_title[[1]]
+  cit <- rows$keypaper_citation[[1]]
+  cat("**Keypaper:** ", title, "  \n", cit, "\n\n", sep = "")
+  print(knitr::kable(
+    rows[, c("rank", "match_title", "match_citation", "similarity")],
+    digits = 4,
+    col.names = c("rank", "match title", "citation", "similarity"),
+    align = c("r", "l", "l", "r")
+  ))
+  cat("\n\n")
+}
+```
+
+# Variant agreement
+
+If `title` and `abstract` agree on a work's relevance, the title is a reliable
+proxy for the abstract. Off-diagonal works are interesting candidates for
+manual inspection: either the title misrepresents the paper or the abstract is
+poor quality.
+
+```{r}
+#| label: fig-variant-agree
+#| fig-cap: "Per-work max similarity to keypapers, plotted pair-wise across the three variants. Each corpus work contributes one point per pair (coloured). The dashed diagonal is perfect agreement; points off it are works the two variants disagree about. Click or box/lasso-select to highlight a work's points across all pairs."
+tar_read(viz_agree_fig)
+```
+
+# Keypaper coherence
+
+How tight is the keypaper set itself? Pairwise cosine similarity between
+the keypapers (title_abstract variant), reordered by average-linkage
+hierarchical clustering. A coherent set shows clear high-similarity
+blocks on the diagonal; a scattered set shows a noisier matrix.
+
+```{r}
+#| label: fig-keypaper-self-sim
+#| fig-cap: "Pairwise cosine similarity between keypapers (title_abstract variant). Axis order is from hierarchical clustering (1 − cosine, average linkage). Block structure on the diagonal indicates topical sub-groups within the keypaper set."
+tar_read(viz_keypaper_self_sim_fig)
+```
+
+## Per-keypaper score distribution
+
+For each of the 105 keypapers, the distribution of cosine similarity
+across the whole corpus. A keypaper with a high median attracts many
+near matches (possibly too generic — "matches everything"); a keypaper
+with a low median is orphaned (the corpus has nothing close to it).
+Sorted by median, descending.
+
+```{r}
+#| label: fig-keypaper-score-dist
+
+htmltools::div(
+  style = "height: 3200px; overflow: visible;",
+  tar_read(viz_keypaper_score_dist_fig)
+)
+```
+
+*Per-keypaper score distribution (q05–q25–median–q75–q95). Keypapers at
+the top score high across the corpus (broad/generic concepts);
+keypapers at the bottom are orphans (their topic isn't
+well-represented in the corpus). Inputs to keypaper-set curation.*
+
+# Sanity check: embedding L2 norms
+
+SPECTER2 should return roughly normalised vectors (norm ≈ 1). A tight
+peak near 1 means the model behaved as expected; outliers or zero-norm
+vectors would indicate problems (empty input, model failures). Sampled
+to 50k per (source, variant) — sufficient for a histogram.
+
+```{r}
+#| label: fig-emb-norm
+#| fig-cap: "Distribution of L2 norms of embedding vectors per (source × variant), sampled to 50,000 rows per leaf, seed = 13. Expect a tight peak — outliers or wide spread suggest input or model issues."
+tar_read(viz_emb_norm_fig)
+```
+
+# Provenance
+
+Everything needed to reproduce this report.
+
+```{r}
+#| label: tbl-provenance
+cfg <- yaml::read_yaml("input/config.yaml")
+active_cfg <- cfg$embeddings$active
+emb_cfg <- cfg$embeddings$configs[[active_cfg]]
+
+# Embedding dimension from one parquet file
+emb_dim <- {
+  one_file <- list.files(
+    dirname(tar_read(emb_tcac20_title)),
+    pattern = "\\.parquet$",
+    full.names = TRUE,
+    recursive = TRUE
+  )[[1]]
+  v_cols <- grep(
+    "^V[0-9]+$",
+    names(arrow::open_dataset(one_file)),
+    value = TRUE
+  )
+  length(v_cols)
+}
+
+git_sha <- tryCatch(
+  trimws(system("git rev-parse --short HEAD", intern = TRUE)),
+  error = function(e) "unknown"
+)
+
+tibble::tibble(
+  field = c(
+    "active embedding config",
+    "model id",
+    "embedding dimension",
+    "title cap (chars, combined variant)",
+    "separator token",
+    "TEI host",
+    "report rendered",
+    "git commit"
+  ),
+  value = c(
+    active_cfg,
+    emb_cfg$model %||% "—",
+    as.character(emb_dim),
+    as.character(emb_cfg$title_cap_combined %||% "—"),
+    emb_cfg$sep_token %||% "—",
+    paste0(emb_cfg$scheme %||% "http", "://", emb_cfg$host),
+    format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
+    git_sha
+  )
+) |>
+  knitr::kable(
+    caption = "Run provenance — paste into the methods section verbatim."
+  )
+```

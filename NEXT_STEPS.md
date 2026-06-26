@@ -60,7 +60,7 @@ Error:
    the embedding work is preserved.
 2. Sync `title` + `title_abstract` corpus variants to R2 and delete
    them locally (~75 GB freed). Caveat: viz layer reads local parquet,
-   so `fig_umap`/`fig_topics` etc. would break until local copies are
+   so `viz_umap_fig`/`viz_topics_fig` etc. would break until local copies are
    restored (or the viz layer is rewired to read R2).
 3. Skip consolidation; leave abstract as scratch shards.
    `arrow::open_dataset()` reads both forms. Would need to confirm
@@ -69,7 +69,7 @@ Error:
 
 **Reminder of the prior policy:** the abstract variant stays *local*
 only — do not sync it to R2. It exists for the laptop-side
-variant-agreement figures (`fig_agree`, top/bottom tables, score-dist
+variant-agreement figures (`viz_agree_fig`, top/bottom tables, score-dist
 across variants). Path B BERTopic doesn't consume it.
 
 ## 🚨 URGENT — first Path B BERTopic fit collapsed
@@ -94,7 +94,7 @@ UMAP settings probably collapsed the embedding into one dominant blob.
 
 Next diagnostic step before retuning:
 
-1. Inspect the UMAP 2D projection (`fig_umap` / `viz_umap_*`) — does it
+1. Inspect the UMAP 2D projection (`viz_umap_fig` / `viz_umap_*`) — does it
    show structure or one blob? That tells us whether UMAP or HDBSCAN
    is the culprit.
 2. If UMAP looks fine → bump `hdbscan_min_cluster_size` down (200?
@@ -129,7 +129,7 @@ caches), so retune cost ≈ full pod run (~50 min).
 
 - [ ] **Finalise visualisations** for the report.
   - [ ] Wire `viz_umap_density` / `viz_umap_hulls` /
-    `viz_umap_cluster_pts` / `fig_umap_clusters` as `tar_target()`s in
+    `viz_umap_cluster_pts` / `viz_umap_clusters_fig` as `tar_target()`s in
     [_targets.R](_targets.R). Functions already in
     [R/build_visualisations.R](R/build_visualisations.R).
   - [ ] Tune `min_points`, `concavity` for the corpus-scale Path B
@@ -142,8 +142,8 @@ caches), so retune cost ≈ full pod run (~50 min).
 - [ ] **Finalise the report**.
   - [ ] Re-render
     [TCAC 2.0 Vectorisation.qmd](TCAC 2.0 Vectorisation.qmd) with the
-    Path B topics. Confirm `viz_score_quantiles_tbl`, `fig_score_dist`,
-    `fig_threshold`, `fig_umap`, `fig_topics`, `tbl_topics` all
+    Path B topics. Confirm `viz_score_quantiles_tbl`, `viz_score_dist_fig`,
+    `viz_threshold_fig`, `viz_umap_fig`, `viz_topics_fig`, `tbl_topics` all
     render cleanly with the new data.
   - [ ] Re-render
     [TCAC 2.0 Building.qmd](TCAC 2.0 Building.qmd) including the new
@@ -254,7 +254,7 @@ caches), so retune cost ≈ full pod run (~50 min).
   reference is the simplest fix.
 - [x] **`viz_topics_table_data` refactored** to depend on
   `emb_tcac20_title` instead of `viz_embeddings`. Lets
-  `fig_topics_tbl` build without the abstract embedding (which is
+  `tbl_topics` build without the abstract embedding (which is
   parked as a separate task).
 - [x] **v0.1.13 image** (fallback projection cached on R2).
 - [x] **v0.1.12 image** (push c-TF-IDF aggregation into duckdb;

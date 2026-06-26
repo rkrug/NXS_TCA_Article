@@ -29,7 +29,7 @@ plotlyOutput("umap_plot")
 
 # In server:
 output$umap_plot <- renderPlotly({
-  tar_read(fig_umap)        # the qs2 object the QMD already uses
+  tar_read(viz_umap_fig)    # the qs2 object the QMD already uses
 })
 ```
 
@@ -39,7 +39,7 @@ That's it. Nothing in [_targets.R](_targets.R) needs to change.
 
 The QMD is **static HTML**: any interactivity has to be wired in
 client-side JS (e.g. the polygon click handler discussed in the
-density+polygons design for `fig_umap_clusters`). Shiny is
+density+polygons design for `viz_umap_clusters_fig`). Shiny is
 **server-driven**: a click is a Shiny event, the server handles it in R
 and pushes the diff back to the client.
 

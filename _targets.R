@@ -14,7 +14,7 @@ if (rl$rate_limit$daily_remaining_usd < 0.1) {
 lapply(list.files("R", pattern = "\\.R$", full.names = TRUE), source)
 
 # Operational config — not tracked, changes do not invalidate targets
-cfg <- yaml::read_yaml("config.yaml")
+cfg <- yaml::read_yaml("input/config.yaml")
 workers <- cfg$workers
 emb_name <- cfg$embeddings$active
 emb_cfg <- cfg$embeddings$configs[[emb_name]]
@@ -277,36 +277,46 @@ list(
   # so each named run becomes its own DAG node. Downstream targets depend on
   # the subset of the config they care about, so changes to unrelated
   # sections (workers, embedding params) do not invalidate them.
-  tar_target(config_file, "config.yaml", format = "file"),
+  tar_target(config_file, "input/config.yaml", format = "file"),
   tar_target(
     viz_cfg,
     {
       v <- yaml::read_yaml(config_file)$viz
-      if (is.null(v)) stop("viz: block missing from config.yaml")
+      if (is.null(v)) {
+        stop("viz: block missing from config.yaml")
+      }
       v
     }
   ),
-  tar_target(
-    bertopic_local_cfg,
-    {
-      b <- yaml::read_yaml(config_file)$bertopic
-      cfg <- b$configs[[b$active_local]]
-      if (is.null(cfg)) {
-        stop("bertopic.active_local '", b$active_local,
-             "' not found under bertopic.configs in config.yaml")
+  if (!is.null(cfg$bertopic$active_local)) {
+    tar_target(
+      bertopic_local_cfg,
+      {
+        b <- yaml::read_yaml(config_file)$bertopic
+        cfg <- b$configs[[b$active_local]]
+        if (is.null(cfg)) {
+          stop(
+            "bertopic.active_local '",
+            b$active_local,
+            "' not found under bertopic.configs in config.yaml"
+          )
+        }
+        cfg
       }
-      cfg
-    }
-  ),
+    )
+  },
   tar_target(
     bertopic_runpod_cfg,
     {
-      y   <- yaml::read_yaml(config_file)
-      b   <- y$bertopic
+      y <- yaml::read_yaml(config_file)
+      b <- y$bertopic
       cfg <- b$configs[[b$active_runpod]]
       if (is.null(cfg)) {
-        stop("bertopic.active_runpod '", b$active_runpod,
-             "' not found under bertopic.configs in config.yaml")
+        stop(
+          "bertopic.active_runpod '",
+          b$active_runpod,
+          "' not found under bertopic.configs in config.yaml"
+        )
       }
       # Phase 1: embeddings live in R2. Merge r2 block into the cfg so the
       # wrapper can translate local emb paths -> s3:// URIs without a
@@ -321,32 +331,34 @@ list(
   # dirname() of the primary variant target; the Python script discovers
   # variant=… partitions inside. fallback_* args are dep tokens so the
   # fallback variant targets are also DAG dependencies.
-  tar_target(
-    topics_tcac20_local,
-    run_bertopic_local(
-      corpus_emb_dir    = dirname(emb_tcac20_title_abstract),
-      reference_emb_dir = dirname(emb_keypapers_title_abstract),
-      out_dir           = "output/TCAC_2.0/topics",
-      cfg               = bertopic_local_cfg,
-      run_name          = yaml::read_yaml(config_file)$bertopic$active_local,
-      fallback_corpus   = emb_tcac20_title,
-      fallback_ref      = emb_keypapers_title
-    ),
-    format = "file"
-  ),
+  if (!is.null(cfg$bertopic$active_local)) {
+    tar_target(
+      topics_tcac20_local,
+      run_bertopic_local(
+        corpus_emb_dir = dirname(emb_tcac20_title_abstract),
+        reference_emb_dir = dirname(emb_keypapers_title_abstract),
+        out_dir = "output/TCAC_2.0/topics",
+        cfg = bertopic_local_cfg,
+        run_name = yaml::read_yaml(config_file)$bertopic$active_local,
+        fallback_corpus = emb_tcac20_title,
+        fallback_ref = emb_keypapers_title
+      ),
+      format = "file"
+    )
+  },
 
   # Path B — RunPod GPU full-fit via cuml. SSH/rsync orchestrated by the
   # R wrapper; needs a pod up from the docker/bertopic-runpod image.
   tar_target(
     topics_tcac20_runpod,
     run_bertopic_runpod(
-      corpus_emb_dir    = dirname(emb_tcac20_title_abstract),
+      corpus_emb_dir = dirname(emb_tcac20_title_abstract),
       reference_emb_dir = dirname(emb_keypapers_title_abstract),
-      out_dir           = "output/TCAC_2.0/topics",
-      cfg               = bertopic_runpod_cfg,
-      run_name          = yaml::read_yaml(config_file)$bertopic$active_runpod,
-      fallback_corpus   = emb_tcac20_title,
-      fallback_ref      = emb_keypapers_title
+      out_dir = "output/TCAC_2.0/topics",
+      cfg = bertopic_runpod_cfg,
+      run_name = yaml::read_yaml(config_file)$bertopic$active_runpod,
+      fallback_corpus = emb_tcac20_title,
+      fallback_ref = emb_keypapers_title
     ),
     format = "file"
   ),
@@ -365,23 +377,9 @@ list(
   # --- Visualisation layer ---------------------------------------------------
   # Data + figure objects (qs2-serialised) for the report. Each figure target
   # also writes a static artifact to output/figures/ for quick viewing.
-  tar_target(
-    viz_embeddings,
-    {
-      # Force deps on every variant target so any change invalidates viz.
-      .deps <- list(
-        emb_tcac20_title,
-        emb_tcac20_abstract,
-        emb_tcac20_title_abstract,
-        emb_keypapers_title,
-        emb_keypapers_abstract,
-        emb_keypapers_title_abstract
-      )
-      # All six leaves share the same config dir two levels up.
-      read_embeddings(dirname(dirname(emb_tcac20_title)))
-    },
-    format = qs2_format()
-  ),
+  # NOTE: viz_embeddings (loaded all six leaves as one tibble) was removed
+  # because it OOM'd at full corpus scale. Each consumer now reads only
+  # the columns it needs via arrow pushdown. See TODO_Visualisations.md §1.
   tar_target(
     viz_scores_long,
     read_scores_long(scores_tcac20_title_abstract),
@@ -389,7 +387,7 @@ list(
   ),
   tar_target(
     viz_metadata,
-    viz_metadata_table(viz_embeddings),
+    viz_metadata_table(emb_tcac20_title),
     format = qs2_format()
   ),
   tar_target(
@@ -403,13 +401,156 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    fig_score_dist,
-    viz_score_dist_fig(viz_scores_long),
+    viz_score_dist_data,
+    build_viz_score_dist_data(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_dist_fig,
+    build_viz_score_dist_fig(viz_score_dist_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_ecdf_data,
+    build_viz_score_ecdf_data(viz_scores_long),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_ecdf_fig,
+    build_viz_score_ecdf_fig(viz_score_ecdf_data),
+    format = qs2_format()
+  ),
+
+  # ---- Embedding-report extras ---------------------------------------------
+  tar_target(
+    viz_top_matches_per_kp,
+    build_viz_top_matches_per_kp_data(
+      scores_tcac20_title_abstract = scores_tcac20_title_abstract,
+      key_works                    = key_works,
+      corpus_tcac20                = corpus_tcac20
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_text_length_data,
+    build_viz_text_length_data(
+      corpus_tcac20      = corpus_tcac20,
+      title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
+      sep_token          = emb_cfg$sep_token          %||% "[SEP]"
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_text_length_fig,
+    build_viz_text_length_fig(viz_text_length_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keypaper_self_sim_data,
+    build_viz_keypaper_self_sim_data(emb_keypapers_title_abstract),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keypaper_self_sim_fig,
+    build_viz_keypaper_self_sim_fig(viz_keypaper_self_sim_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_year_data,
+    build_viz_score_year_data(viz_scores_long, corpus_tcac20),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_score_year_fig,
+    build_viz_score_year_fig(viz_score_year_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_type_counts,
+    build_viz_type_counts(corpus_tcac20, min_pct = 0.5),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_type_count_fig,
+    build_viz_type_count_fig(viz_type_counts),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_type_score_stats,
+    build_viz_type_score_stats(viz_scores_long, corpus_tcac20, min_pct = 0.5),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_type_score_heatmap_fig,
+    build_viz_type_score_heatmap_fig(viz_type_score_stats),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_type_score_box_fig,
+    build_viz_type_score_box_fig(viz_type_score_stats),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_language_counts,
+    build_viz_language_counts(corpus_tcac20, min_pct = 0.5),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_language_fig,
+    build_viz_language_fig(viz_language_counts),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_truncation_stats,
+    build_viz_truncation_stats(
+      corpus_tcac20,
+      title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
+      sep_token          = emb_cfg$sep_token          %||% "[SEP]"
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keypaper_score_dist_data,
+    build_viz_keypaper_score_dist_data(
+      scores_tcac20_title_abstract, key_works
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keypaper_score_dist_fig,
+    build_viz_keypaper_score_dist_fig(viz_keypaper_score_dist_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_emb_norm_data,
+    build_viz_emb_norm_data(
+      emb_tcac20_title             = emb_tcac20_title,
+      emb_tcac20_abstract          = emb_tcac20_abstract,
+      emb_tcac20_title_abstract    = emb_tcac20_title_abstract,
+      emb_keypapers_title          = emb_keypapers_title,
+      emb_keypapers_abstract       = emb_keypapers_abstract,
+      emb_keypapers_title_abstract = emb_keypapers_title_abstract
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_emb_norm_fig,
+    build_viz_emb_norm_fig(viz_emb_norm_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_citation_score_data,
+    build_viz_citation_score_data(viz_scores_long, corpus_tcac20),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_citation_score_fig,
+    build_viz_citation_score_fig(viz_citation_score_data),
     format = qs2_format()
   ),
   tar_target(
     viz_top_bottom,
-    viz_top_bottom_tables(viz_embeddings, scores_tcac20_title_abstract),
+    viz_top_bottom_tables(viz_scores_long, corpus_tcac20),
     format = qs2_format()
   ),
   tar_target(
@@ -418,13 +559,13 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    fig_agree,
-    viz_variant_agree_fig(viz_agree_data),
+    viz_agree_fig,
+    build_viz_agree_fig(viz_agree_data),
     format = qs2_format()
   ),
   tar_target(
-    fig_threshold,
-    viz_threshold_fig(viz_scores_long),
+    viz_threshold_fig,
+    build_viz_threshold_fig(viz_scores_long),
     format = qs2_format()
   ),
   tar_target(
@@ -469,8 +610,8 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    fig_umap,
-    viz_umap_fig(
+    viz_umap_fig,
+    build_viz_umap_fig(
       emb_corpus = viz_umap_join$emb_corpus,
       emb_keypaper = viz_umap_kp,
       contour = viz_umap_contour_grid,
@@ -490,8 +631,8 @@ list(
     format = qs2_format()
   ),
   tar_target(
-    fig_topics,
-    viz_topics_fig(
+    viz_topics_fig,
+    build_viz_topics_fig(
       topics_tcac20 = topics_tcac20_runpod,
       emb_corpus = viz_umap_join$emb_corpus,
       emb_keypaper = viz_umap_kp
@@ -503,7 +644,7 @@ list(
   # the embeddings dataset, or the .qmd itself changes.
   tarchetypes::tar_quarto(
     report_vectorisation,
-    path = "TCAC 2.0 Vectorisation.qmd",
+    path = "TCAC 2.0 Embedding Report.qmd",
     quiet = TRUE
   ),
 

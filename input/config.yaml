@@ -83,9 +83,9 @@ r2:
 # multiple runs coexist on disk for comparison. Add entries by appending
 # under `configs:` and pointing one of the `active_*` keys at the new name.
 bertopic:
-  active_local:   default_local        # which entry drives topics_tcac20_local
+  active_local:   ~                    # which entry drives topics_tcac20_local, ~ for disabled
   active_runpod:  default_runpod       # which entry drives topics_tcac20_runpod
-  active_for_viz: default_runpod        # which run feeds viz_topics_* in the report
+  active_for_viz: default_runpod       # which run feeds viz_topics_* in the report
 
   configs:
     default_local:

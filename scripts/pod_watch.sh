@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Watch the BERTopic pod's process + GPU state every N seconds.
 #
-# Reads SSH host/port/user/key from config.yaml's
+# Reads SSH host/port/user/key from input/config.yaml's
 # bertopic.configs.default_runpod section, so you don't have to retype
 # the connection details every time the pod is redeployed.
 #
@@ -26,13 +26,13 @@
 # log is lost with the volume.
 set -euo pipefail
 
-if [[ ! -f config.yaml ]]; then
-    echo "Run from the repo root (config.yaml not found here)." >&2
+if [[ ! -f input/config.yaml ]]; then
+    echo "Run from the repo root (input/config.yaml not found here)." >&2
     exit 1
 fi
 
 eval "$(Rscript -e '
-cfg <- yaml::read_yaml("config.yaml")$bertopic$configs$default_runpod
+cfg <- yaml::read_yaml("input/config.yaml")$bertopic$configs$default_runpod
 cat(sprintf("SSH_HOST=%s\nSSH_PORT=%s\nSSH_USER=%s\nSSH_KEY=%s\n",
             shQuote(cfg$ssh_host), shQuote(cfg$ssh_port),
             shQuote(cfg$ssh_user), shQuote(path.expand(cfg$ssh_key_path))))
