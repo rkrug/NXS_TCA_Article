@@ -2,75 +2,7 @@
 
 Living checklist of what's next. Updated as items land.
 
-Last updated: 2026-06-12.
-
-## ⏸ Parked — `emb_tcac20_abstract` consolidation failed (disk full)
-
-Picking up in ~a week (2026-06-13 + 1w). Symptom + state captured here so
-we don't have to re-derive it from logs.
-
-**What ran:** `tar_make("emb_tcac20_abstract")` — the abstract variant of
-the corpus, ~4.6 M rows, on the RunPod TEI pod at 161.5 docs/s average
-(low end — same client-bottleneck pattern as title).
-
-**Embedding stage succeeded:**
-
-```
-Done. embedded=4,605,817 rows in 1220 shards, 28520.1s total (161.5 docs/s avg).
-[corpus|abstract] consolidating scratch shards into ~1 GB part-NNNN.parquet chunks via duckdb COPY
-```
-
-**Then consolidation failed:**
-
-```
-✖ emb_tcac20_abstract errored
-✖ errored pipeline [7h 59m 10.1s, 1 completed, 9 skipped]
-Error:
-! Error in tar_make():
-  Invalid Error: IO Error: Could not write file
-  "output/TCAC_2.0/embeddings/config=SPECTER2_runpod/source=corpus/variant=abstract/.parts.tmp/part-20.parquet":
-  No space left on device
-ℹ Context: rapi_execute
-ℹ Error type: INVALID
-```
-
-**Disk state at failure** (2026-06-13):
-
-- `output/TCAC_2.0/embeddings/config=SPECTER2_runpod/` total: 110 GB
-- `variant=abstract` (scratch + partial consolidated): 35 GB
-- Free on `/System/Volumes/Data`: 71 GiB
-- Consolidation roughly doubles disk use during the COPY (scratch
-  shards still on disk + new `.parts.tmp/part-*.parquet` being written),
-  which is why it ran out at part-20.
-
-**On disk now** (untouched per user request):
-
-- **All 4,605,817 abstract embeddings are present as scratch shards.**
-  No compute is lost. The 8-hour TEI run does **not** need to be
-  re-done. Only the final post-processing (consolidation into ~1 GB
-  parquet chunks) failed.
-- `variant=abstract/.parts.tmp/part-0.parquet … part-19.parquet` —
-  incomplete consolidation output. Safe to delete on resume;
-  consolidation starts from scratch each time.
-
-**Resume options** (already enumerated, no action taken):
-
-1. Free ~35 GB elsewhere on the laptop, delete `.parts.tmp/`, re-run
-   `tar_make("emb_tcac20_abstract")` — only the consolidation re-runs;
-   the embedding work is preserved.
-2. Sync `title` + `title_abstract` corpus variants to R2 and delete
-   them locally (~75 GB freed). Caveat: viz layer reads local parquet,
-   so `viz_umap_fig`/`viz_topics_fig` etc. would break until local copies are
-   restored (or the viz layer is rewired to read R2).
-3. Skip consolidation; leave abstract as scratch shards.
-   `arrow::open_dataset()` reads both forms. Would need to confirm
-   `embed_works()` can mark the variant complete without consolidating
-   (probably needs a small wrapper change).
-
-**Reminder of the prior policy:** the abstract variant stays *local*
-only — do not sync it to R2. It exists for the laptop-side
-variant-agreement figures (`viz_agree_fig`, top/bottom tables, score-dist
-across variants). Path B BERTopic doesn't consume it.
+Last updated: 2026-06-26.
 
 ## 🚨 URGENT — first Path B BERTopic fit collapsed
 
@@ -94,9 +26,9 @@ UMAP settings probably collapsed the embedding into one dominant blob.
 
 Next diagnostic step before retuning:
 
-1. Inspect the UMAP 2D projection (`viz_umap_fig` / `viz_umap_*`) — does it
-   show structure or one blob? That tells us whether UMAP or HDBSCAN
-   is the culprit.
+1. Inspect the UMAP 2D projection (`viz_umap_fig` / `viz_umap_*`) — does
+   it show structure or one blob? That tells us whether UMAP or
+   HDBSCAN is the culprit.
 2. If UMAP looks fine → bump `hdbscan_min_cluster_size` down (200?
    100?) and/or `min_samples` down.
 3. If UMAP collapsed → retune `umap_n_neighbors` (try 50-100) and
@@ -109,182 +41,137 @@ caches), so retune cost ≈ full pod run (~50 min).
 
 ## Short-term — finish current Phase 1 cycle
 
-- [ ] **Wait for first Path B BERTopic run to complete.**
-  Currently running on the v0.1.5 pod (CUDA 12.0 base, driver
-  pre-flight in wrapper). Expected wall time ~1.5-2 h. Result lands
-  as `output/TCAC_2.0/topics/config=SPECTER2_runpod/bertopic=default_runpod/variant=title_abstract/`.
+- [ ] **Retune the BERTopic fit** per the URGENT section above.
 
-- [ ] **Embed the `abstract` variant of the corpus.**
-  Compute on the RunPod TEI pod (fast, infra already there), but
-  result stays local — **do not sync to R2**. Path B BERTopic uses
-  only `title` + `title_abstract`, so the abstract variant has no
-  consumer in the cloud; it's only needed for the report's
-  variant-agreement figures + `viz_embeddings` target which run on
-  the laptop. Run `tar_make(names = "emb_tcac20_abstract")` once the
-  BERTopic dispatch is no longer competing for the pod.
-  - [ ] After embed: update
-    [scripts/sync_embeddings_to_r2.sh](scripts/sync_embeddings_to_r2.sh)
-    to exclude `**/variant=abstract/**` so it never accidentally gets
-    pushed to R2.
-
-- [ ] **Finalise visualisations** for the report.
+- [ ] **Finalise visualisations** for the reports.
   - [ ] Wire `viz_umap_density` / `viz_umap_hulls` /
-    `viz_umap_cluster_pts` / `viz_umap_clusters_fig` as `tar_target()`s in
-    [_targets.R](_targets.R). Functions already in
+    `viz_umap_cluster_pts` / `viz_umap_clusters_fig` as `tar_target()`s
+    in [_targets.R](_targets.R). Functions already in
     [R/build_visualisations.R](R/build_visualisations.R).
   - [ ] Tune `min_points`, `concavity` for the corpus-scale Path B
-    output (Path A overclustered; Path B should self-clean).
-  - [ ] Decide on click-to-drill-down UX final form (highlight colour,
-    point sample size, hover text).
-  - [ ] Add the figure to [TCAC 2.0 Vectorisation.qmd](TCAC 2.0 Vectorisation.qmd)
-    with caption.
+    output once the BERTopic fit is retuned.
+  - [ ] Add the density+polygon figure to
+    [TCAC 2.0 Embedding Report.qmd](TCAC 2.0 Embedding Report.qmd) with
+    caption.
 
-- [ ] **Finalise the report**.
+- [ ] **Finalise the reports**.
   - [ ] Re-render
-    [TCAC 2.0 Vectorisation.qmd](TCAC 2.0 Vectorisation.qmd) with the
-    Path B topics. Confirm `viz_score_quantiles_tbl`, `viz_score_dist_fig`,
-    `viz_threshold_fig`, `viz_umap_fig`, `viz_topics_fig`, `tbl_topics` all
-    render cleanly with the new data.
+    [TCAC 2.0 Embedding Report.qmd](TCAC 2.0 Embedding Report.qmd) with
+    the retuned Path B topics.
   - [ ] Re-render
-    [TCAC 2.0 Building.qmd](TCAC 2.0 Building.qmd) including the new
-    pipeline + sequence diagrams.
+    [TCAC 2.0 Corpus Report.qmd](TCAC 2.0 Corpus Report.qmd) once
+    `corpus_tcac10` + `corpus_comparison` finish.
   - [ ] Spot-check accessibility (alt text, contrast for the polygon
     layer).
 
 - [ ] **Finalise documentation**.
-  - [ ] Cross-link TD_ and TODO_ files from
-    [CLAUDE.md](CLAUDE.md) and the report appendices.
-  - [ ] Update [README.md](README.md) (if/when one exists) with the
-    Phase 1 R2 workflow + how to reproduce.
   - [ ] Refresh image digests in
-    [TD_BERTopic_Parameters.md](TD_BERTopic_Parameters.md) once
-    `bertopic-runpod:v0.1.5` is verified working.
+    [TD_BERTopic_Parameters.md](TD_BERTopic_Parameters.md) once a
+    well-tuned image is verified.
+  - [ ] Cross-link TD_ and TODO_ files from
+    [CLAUDE.md](CLAUDE.md) and report appendices.
 
 ## Medium-term — keypaper-swap workflow
 
-- [x] **Implement BERTopic stage caching (Option B from earlier
-  discussion — Python-internal staging, R targets unchanged)**.
-  Done in v0.1.8 image / `scripts/run_bertopic_gpu.py` refactor.
-  Six explicit stages with cascade cfg-hash keying, R2-backed.
-  Keypapers decoupled from BERTopic fit (Option A from the TODO).
-  Memory-friendly c-TF-IDF on per-topic concatenated docs (sidesteps
-  the Representation-step OOM that killed three earlier runs).
 - [ ] **R-side target split (upgrade to "Option A from the original
   discussion")**: split `topics_tcac20_runpod` into
   `umap_fit_runpod` + `hdbscan_fit_runpod` + `topics_tcac20_runpod`
   with scoped `bertopic_runpod_cfg_umap` /
   `bertopic_runpod_cfg_hdbscan` cfg subsets. Lets `tar_outdated()`
-  report per-stage rather than treating the whole pipeline as one
-  blob. Compute savings are the same as v0.1.8; the gain is
-  orchestration clarity. Deferred unless the workflow grows.
+  report per-stage. Compute savings are the same as v0.1.8; the gain
+  is orchestration clarity. Deferred unless the workflow grows.
 - [ ] **R2 lifecycle rule: 30-day TTL on `intermediate/` prefix**.
-  Run once via rclone:
   ```bash
   rclone backend lifecycle r2:tcac-2-0 \
     set --rule 'prefix=intermediate/,days=30,action=delete'
   ```
-
 - [ ] **Add named `keypapers:` config block**
   per [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md).
   Canonical 4-column schema `(id, doi, title, abstract)` with
-  `id` user-provided and unique; optional DOI for cross-reference;
-  `title`/`abstract` from user OR fetched from OpenAlex when only
-  DOI provided. Supports `.rds`, `.csv`, `.json` inputs. Each set's
-  outputs hive-partitioned under `keypaper_set=<name>/` so prior
-  results coexist.
-
+  `id` user-provided and unique. Outputs hive-partitioned under
+  `keypaper_set=<name>/` so prior results coexist.
 - [ ] **Build the first new keypaper set**.
   Likely candidates: imagination, sustainability, transformation.
-  Compile manually as CSV with the 4-column schema for ~30-50
-  papers, drop under `input/key papers/`, add to
-  `keypapers.sets:` in config.yaml, dispatch — should be ~7-10 min
-  on a fresh pod thanks to v0.1.13 R2 stage caching.
-
-- [ ] **Cross-set comparison viz** (later).
-  Once ≥2 keypaper sets have results: Jaccard overlap of relevant
-  topic IDs, heatmap of n_keypapers per topic × set, per-keypaper
-  distance to nearest topic centroid. Sketched in
-  [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md) §"Open
-  questions deferred for later".
+  After v0.1.13 R2 stage caching, dispatch is ~7-10 min on a fresh pod.
+- [ ] **Re-enable + fix the per-sub-term `assess_*` targets**
+  ([R/assess_search_term.R](R/assess_search_term.R)). Currently
+  commented out in [_targets.R](_targets.R) — the `tfc_st` formatting
+  contains lines that OpenAlex rejects with HTTP 500 when AND-combined
+  with `nature_st`. Sanitising the search-term file (or filtering
+  malformed sub-terms inside the function) unblocks them.
+- [ ] **Cross-set comparison viz** (later, when ≥2 keypaper sets):
+  Jaccard overlap of relevant topic IDs, heatmap of n_keypapers per
+  topic × set, per-keypaper distance to nearest topic centroid. Sketch
+  in [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md)
+  §"Open questions deferred for later".
 
 ## Optional — implement if/when the pain materialises
 
 - [ ] **Detached BERTopic dispatch** — make a pod run survive
   Ctrl-C in R, R/RStudio crashes, laptop sleep, or laptop ↔ pod
-  network breakdown. See [TODO_DetachedDispatch.md](TODO_DetachedDispatch.md)
-  for the full design. Stage caching already mitigates ~most of the
-  same risk class (worst-case loss with Ctrl-C today is ~30-60 min,
-  one stage's compute); this would shrink that to "zero loss".
-  ~1 day of work, no image rebuild required (R wrapper only).
-  Trigger criteria documented in the TODO.
+  network breakdown. See
+  [TODO_DetachedDispatch.md](TODO_DetachedDispatch.md). Stage caching
+  already mitigates most of the risk class (worst-case loss with
+  Ctrl-C today is ~30-60 min, one stage's compute); this shrinks that
+  to "zero loss". ~1 day of work, R wrapper only.
 
 ## Conceptual — what the figures should say
 
 - [ ] **Visualisation principles + backlog**
-  ([TODO_Visualisations.md](TODO_Visualisations.md)).
-  Captures the design decisions that need to be made before adding
-  more figures: shared coordinate system, fig_/tbl_ convention,
-  replacing `viz_scores_long`, when to wire density+polygon viz,
-  cross-keypaper-set viz design, variant-agreement keep-or-drop,
-  interactive vs static deliverables.
+  ([TODO_Visualisations.md](TODO_Visualisations.md)). Shared
+  coordinate system, fig_/tbl_/viz_ convention, replacing
+  `viz_scores_long`, when to wire density+polygon viz, cross-keypaper-
+  set viz design, variant-agreement keep-or-drop, interactive vs
+  static deliverables.
 
 ## Deferred — not on roadmap, kept for reference
 
 - **Full cloud migration**
   ([TODO_FullCloudMigration.md](TODO_FullCloudMigration.md)).
   Not needed for the fixed-corpus + variable-keypapers workflow.
-  Revisit only if multi-author collaboration or reviewer-side
-  reproducibility becomes a goal.
-- **Shiny app**
-  ([TODO_ShinyMigration.md](TODO_ShinyMigration.md)).
-  Not needed for the static report deliverable. Revisit if
-  reviewers want live click-through analysis.
+- **Shiny app** ([TODO_ShinyMigration.md](TODO_ShinyMigration.md)).
+  Not needed for the static report deliverable.
 - **Phase 2 of cloud storage**
   ([cloud_storage_migration.md](cloud_storage_migration.md) §"Phase 2").
-  Full `_targets/` cloud-mode. Not blocking anything.
+  Full `_targets/` cloud-mode. Not blocking.
 
 ## Done — most recent first
 
-- [x] **`topics_tcac20` alias removed**. Viz layer now references
-  `topics_tcac20_runpod` directly. The previous alias's dynamic
-  switch via `bertopic.active_for_viz` was a footgun — targets'
-  static dependency analysis treated both Path A and Path B targets
-  as deps, double-dispatching Path A whenever Path B viz was
-  requested. With Path B as the production path, the direct
-  reference is the simplest fix.
+- [x] **Corpus Report + TCAC 1.0 ↔ 2.0 comparison**
+  (`TCAC 2.0 Corpus Report.qmd`, `corpus_comparison`,
+  `keypapers_in_corpus`, `yearly_counts`).
+- [x] **`get_count.R` bug fix** — `tca_*` queries now use the
+  combined `tca_st` instead of `nature_st`.
+- [x] **`config.yaml` moved into `input/`** (mirrors other inputs).
+- [x] **`viz_embeddings` removed; `viz_scores_long` slimmed** to
+  per-id max-sim (17M rows). All consumers refactored to arrow
+  pushdown / duckdb GREATEST.
+- [x] **`fig_*` / `tbl_*` / `viz_*` naming pass** + `build_viz_*`
+  helpers to avoid target / function name collisions.
+- [x] **`emb_tcac20_abstract` consolidation resumed** after disk-full
+  crash via [scripts/consolidate_leaf.R](scripts/consolidate_leaf.R).
+  All three corpus variants now have `.embed_complete` markers.
+- [x] **`topics_tcac20` alias removed**. Viz layer references
+  `topics_tcac20_runpod` directly (avoids targets' static-analysis
+  double-dispatch).
 - [x] **`viz_topics_table_data` refactored** to depend on
-  `emb_tcac20_title` instead of `viz_embeddings`. Lets
-  `tbl_topics` build without the abstract embedding (which is
-  parked as a separate task).
+  `emb_tcac20_title` instead of `viz_embeddings`.
 - [x] **v0.1.13 image** (fallback projection cached on R2).
-- [x] **v0.1.12 image** (push c-TF-IDF aggregation into duckdb;
-  fixes OOM on the 117 GB pod).
+- [x] **v0.1.12 image** (push c-TF-IDF aggregation into duckdb).
 - [x] **v0.1.11 image** (text-less corpus read in stage_umap).
 - [x] **v0.1.10 image** (del df_corpus before fit_transform).
 - [x] **v0.1.9 image** (multipart upload + heartbeat self-match fix).
-- [x] **v0.1.8 image** (stage caching + BERTopic-bypass) — pending build.
-- [x] **v0.1.7 image** (external bash heartbeat keeper, GIL-immune) — `a46a261`.
-- [x] **v0.1.6 image** (PYTHONUNBUFFERED=1 for real-time log flushing) — `dba7af2`.
-- [x] **v0.1.5 image** (CUDA 12.0 base + driver pre-flight) — `499a488`.
-- [x] **TODO_ rename + stage caching design** — `27bc7ee`.
-- [x] **Density+polygon viz helpers** — `7d2b16d`.
-- [x] **TD_ShinyMigration.md** — `51d9901`.
-- [x] **v0.1.4 image** (heartbeat thread + python symlink in image) —
-  `2b97e43`.
-- [x] **`output/` symlink workaround** — `ebbd4bc`.
-- [x] **Phase 1 cloud storage + multi-file embeddings + fig_ rename + docs**
-  — `2174c89`. Embeddings now in R2, pod reads directly via duckdb
-  httpfs.
+- [x] **v0.1.8 image** (stage caching + BERTopic-bypass).
+- [x] **v0.1.7 image** (external bash heartbeat keeper, GIL-immune).
+- [x] **v0.1.6 image** (PYTHONUNBUFFERED=1).
+- [x] **v0.1.5 image** (CUDA 12.0 base + driver pre-flight).
+- [x] **Phase 1 cloud storage** — embeddings on R2, pod reads via
+  duckdb httpfs.
 
 ## Open questions to revisit
 
-- After the first successful Path B BERTopic run: are the parameters
-  good? Particularly `hdbscan_min_cluster_size: 500` — does the
-  result give the expected ~200-500 topics, or do we need to retune?
-- ~~Should the `abstract`-only embedding variant ever go on R2?~~
-  **Resolved 2026-06-11**: no. Path B doesn't consume it, only the
-  laptop-side variant-agreement figures do. Embedding compute on
-  pod, result stays local.
+- After a successful Path B BERTopic run: are the params good?
+  Particularly `hdbscan_min_cluster_size: 500` — gives ~200-500
+  topics or do we need to retune?
 - Image versioning: bump to v0.2.0 once the keypaper-swap refactor
-  lands, signalling a meaningful behavioural change in the topic
-  outputs (clusters no longer include keypapers in the fit).
+  lands, signalling clusters no longer include keypapers in the fit.

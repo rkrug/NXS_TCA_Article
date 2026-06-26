@@ -48,43 +48,38 @@ more, pick a small set of conventions and apply them everywhere:
 
 | Figure / table | Target | State | Notes |
 |---|---|---|---|
-| Score density | `viz_score_dist_fig` | OOM-prone | needs `viz_scores_long` (5.77M × 105 → 600M-row long form) |
-| Threshold | `viz_threshold_fig` | OOM-prone | same dependency |
-| Variant agreement | `viz_agree_fig` | OOM-prone | same; also needs all three variants embedded |
-| Top/bottom matches | `viz_top_bottom` | OOM-prone | same |
-| Score summary table | `viz_score_summary_tbl` | OOM-prone | same |
-| Score quantiles table | `viz_score_quantiles_tbl` | OOM-prone | same |
-| UMAP scatter | `viz_umap_fig` | **unblocked** | now reads scores via pushdown for the sampled ids only |
-| UMAP topics overlay | `viz_topics_fig` | **unblocked** | same |
-| Topics table | `tbl_topics` | **unblocked** | reads `emb_tcac20_title` directly |
-| Density + polygons | `viz_umap_clusters_fig` | **not wired** | function exists in `R/build_visualisations.R`; needs tar_target + inputs `viz_umap_density`, `viz_umap_hulls`, `viz_umap_cluster_pts`. Don't wire until BERTopic fit is fixed (current 6-topic collapse would render as one giant polygon). |
-| Variant-agreement figures | several | deferred | abstract-only variant not embedded yet; not on R2 either ([NEXT_STEPS.md](NEXT_STEPS.md)). |
+| Score density | `viz_score_dist_fig` | **built** | frequency polygons on pre-binned `viz_score_dist_data` |
+| Score ECDF | `viz_score_ecdf_fig` | **built** | sampled 50k/variant, seed=13 |
+| Threshold | `viz_threshold_fig` | **built** | log10(0) drop applied |
+| Variant agreement | `viz_agree_fig` | **built** | inverted-L 2D-tile heatmap; abstract variant now embedded so the figure is buildable |
+| Top/bottom matches | `viz_top_bottom` | **built** | refactored to read corpus titles via arrow pushdown |
+| Score summary table | `viz_score_summary_tbl` | **built** | reads slim `viz_scores_long` |
+| Score quantiles table | `viz_score_quantiles_tbl` | **built** | same |
+| UMAP scatter | `viz_umap_fig` | **built** | sampled corpus (1000 rows by default), keypapers always unsampled |
+| UMAP topics overlay | `viz_topics_fig` | **built** | depends on `topics_tcac20_runpod` |
+| Topics table | `tbl_topics` | **built** | reads `emb_tcac20_title` directly |
+| Type breakdown | `viz_type_count_fig`, `viz_type_score_heatmap_fig`, `viz_type_score_box_fig` | **built** | filtered to types ≥ 0.5% |
+| Per-keypaper score distribution | `viz_keypaper_score_dist_fig` | **built** | plotly with HTML anchor tick labels — click to OpenAlex |
+| Keypaper self-similarity | `viz_keypaper_self_sim_fig` | **built** | 105×105 cosine heatmap, hierarchical order |
+| Embedding L2-norm sanity | `viz_emb_norm_fig` | **built** | sampled 50k/leaf |
+| Citation-vs-score | `viz_citation_score_fig` | **built** | 2D bin of (log citations, max sim) |
+| Score vs publication year | `viz_score_year_fig` | **built** | tiles + mean/median lines per variant |
+| Text length, language, truncation | various | **built** | reported from corpus parquet via duckdb pushdown |
+| Density + polygons | `viz_umap_clusters_fig` | **not wired** | function exists in `R/build_visualisations.R`; needs tar_target + inputs `viz_umap_density`, `viz_umap_hulls`, `viz_umap_cluster_pts`. Don't wire until BERTopic fit is retuned — current 6-topic collapse would render as one giant polygon. |
+| Topic-size histogram | `fig_topic_sizes` | **not wired** | retune diagnostic — see §2 below. |
 
 ## Big conceptual decisions to make
 
-### 1. What is `viz_scores_long`, replaced with what?
+### 1. `viz_scores_long` — DONE
 
-The current `viz_scores_long` materialises the wide score parquet into a
-600M-row tibble. Every distribution / summary consumer depends on it.
-At full-corpus scale that's the structural cause of most viz OOMs.
+Replaced with the slim per-id max form (17M rows × `(id, variant, score)`)
+computed via duckdb `GREATEST()`. All consumers refactored. The old
+605M-row wide-pivot is gone. Documented here so future "what was the
+problem" questions don't re-investigate.
 
-Options:
-
-- **Slim long form**: per (id, variant) the *max* over keypapers — 17M
-  rows × 3 vars ≈ 50 MB. Fine for percentile / quantile summaries; loses
-  the per-keypaper detail.
-- **Pre-aggregated summary cache**: store quantile breaks +
-  histogram bins per variant, never materialise the rows. Distribution
-  figures read the cache; sampling figures sample on demand from the
-  parquet via arrow pushdown.
-- **Sample uniformly**: 100k rows per variant for the density plots,
-  full data for quantiles via arrow `summarise`. Works at all scales,
-  visually indistinguishable from full.
-
-Recommended path: combination of pre-aggregated summary cache (for
-tables and density curves) + targeted pushdown reads (for per-id joins
-like the one `viz_umap_data` now does). Drop `viz_scores_long` once
-both are in place.
+Pre-binning the histogram (`viz_score_dist_data`) and sampled ECDF
+(`viz_score_ecdf_data`) keep the fig targets tiny — `tar_read` is
+instant.
 
 ### 2. How do we visualise cluster collapse vs success?
 
@@ -116,19 +111,13 @@ Once a second keypaper set lands, the report needs to answer
 Defer the build until ≥2 sets exist; capture the design here so the
 choice is pre-made.
 
-### 4. Variant-agreement viz: keep or drop?
+### 4. Variant-agreement viz: kept (decision (a))
 
-Originally three embedding variants (title, abstract, title_abstract).
-The current production path only consumes title and title_abstract;
-abstract is deferred (no priority, stays local). Variant-agreement
-figures were a sanity check on the embedding step — at full corpus
-scale they're expensive to build (require all three variants on disk
-+ a long pivot).
-
-Decision needed: either (a) commit to embedding the abstract variant
-eventually so these figures exist for the methodology section, or (b)
-drop them entirely and replace with a smaller "pilot variant agreement"
-on the 1000-row pilot subset. The latter is honest and cheap.
+All three variants are now embedded (title, abstract, title_abstract).
+The variant-agreement figure (`viz_agree_fig`) is built as an
+inverted-L 2D-tile heatmap of per-work max-sim between each variant
+pair. Pre-binned data target (`viz_agree_data`, ~30k rows) — figure
+loads instantly.
 
 ### 5. Interactive vs static
 
@@ -146,19 +135,17 @@ Right now `tbl_topics` produces an HTML widget into
 report but won't survive a PDF render. Pick the deliverable form
 before adding more figures.
 
-## Wiring backlog (mechanical, do once decisions above are made)
+## Wiring backlog (mechanical)
 
 - [ ] Wire `viz_umap_density`, `viz_umap_hulls`, `viz_umap_cluster_pts`,
   `viz_umap_clusters_fig` as `tar_target()`s. Inputs already implemented
-  in [R/build_visualisations.R](R/build_visualisations.R) (lines 720+).
+  in [R/build_visualisations.R](R/build_visualisations.R). Defer until
+  BERTopic fit is retuned (the 6-topic collapse would render as one
+  giant polygon).
 - [ ] Add `fig_topic_sizes` (cheap, useful as a retune diagnostic).
-- [ ] Replace `viz_scores_long` with the slim alternative (see §1).
-- [ ] Decide on `viz_score_summary_tbl` / `viz_score_quantiles_tbl`
-  rename → `tbl_score_summary` / `tbl_score_quantiles` for fig_/tbl_
-  consistency (already done for `tbl_topics`).
-- [ ] Move table outputs to `output/tables/` (done for `tbl_topics`,
-  outstanding for the other inline-knitr tables — those don't write
-  files, so only matters if they grow into widget exports).
+- [ ] Rename `viz_score_summary_tbl` / `viz_score_quantiles_tbl` →
+  `tbl_score_summary` / `tbl_score_quantiles` for prefix consistency
+  with `tbl_topics`.
 - [ ] Caption convention: every figure caption says (a) what's shown,
   (b) sample size + seed if applicable, (c) which keypaper set was used.
 
