@@ -1,6 +1,7 @@
 get_count <- function(
   tfc_st,
   nature_st,
+  tca_st,
   types_filter,
   workers
 ) {
@@ -26,11 +27,11 @@ get_count <- function(
           type = types_filter
         ),
         tca_complete = openalexPro::pro_query(
-          title_and_abstract.search = nature_st,
+          title_and_abstract.search = tca_st,
           type = NULL
         ),
         tca_filtered = openalexPro::pro_query(
-          title_and_abstract.search = nature_st,
+          title_and_abstract.search = tca_st,
           type = types_filter
         )
       )

@@ -1,0 +1,500 @@
+---
+title: "TCAC 2.0 — Vectorisation Report"
+subtitle: "SPECTER2 embeddings, keypaper-similarity scoring"
+author:
+  - name:
+      family: Krug
+      given: Rainer M.
+    id: rmk
+    orcid: 0000-0002-7490-0066
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 9
+    fig-height: 5
+    # grid:
+    #     sidebar-width: 0px
+    #     body-width: 4000px
+    #     margin-width: 200px
+    #     gutter-width: 1.5rem      
+execute:
+  message: false
+  warning: false
+  cache: false
+---
+
+
+ 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.11389482.svg)](https://doi.org/10.5281/zenodo.11389482)
+[![GitHub release](https://img.shields.io/github/release/IPBES-Data/IPBES_TCA_Corpus.svg)](https://github.com/IPBES-Data/IPBES_TCA_Corpus/releases/latest)
+[![License: CC BY 4.0](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
+
+Part of the Data Management Report [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10251349.svg)](https://doi.org/10.5281/zenodo.10251349)
+
+# Disclaimer
+
+# Contributors of the original TCAC 1.0
+## Assessment Experts
+
+- Shannon, Lynne
+- Liao, Chuan
+- Zinngrebe, Yves [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0003-1731-2222) 
+- Frantzeskaki, Niki [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0002-6983-448X)
+- Gurung, Janita [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0003-1053-4412)
+- Leventon, Julia [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0002-2447-8522) 
+- Wickson, Fern
+- Biggs, Oonsie
+- Bennett, Elena
+- Calderón-Contreras, Rafael [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0001-8709-4502)
+- Gosnell, Hannah
+- Cantu Fernandez, Mariana
+- Carr, Edward [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0001-7784-471X)
+- Benessaiah, Karina [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0001-9959-554X)
+
+## Data and Knowledge tsu
+
+- Niamir, Aidin [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0003-4511-3407)
+- Gudde, Renske  [![ORCID](./images/ORCID-iD_icon-16x16.png)](https://orcid.org/0000-0003-4727-1011)
+
+
+```{r}
+#| label: setup
+#| include: false
+
+library(targets)
+library(arrow)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+```
+
+# Working Title
+TCAC 2.0 — Transformative Change Assessment Corpus 2.0
+
+## Code repo
+
+[Github repository](https://github.com/IPBES-Data/TCAC-2.0)
+
+# Introduction
+
+The literature search for the Transformative Change assessment corpus was conducted using search terms provided by the experts and refined in co-operation with the IPBES task force for data and knowledge management.
+The search was conducted using [OpenAlex](https://openalex.org), scripted from [R](https://cran.r-project.org) to use  the [OpenAlex API](https://docs.openalex.org). Search terms for the following searches were defined:
+
+- **Transformative Change**,
+- **Nature / Environment**
+- **case studies** and 
+- **additional search terms** for specific corpora
+
+To assess the quality of the corpus, sets of key papers were selected by the experts to verify if these are in the corpus. 
+These key papers were selected per chapter / sub-chapter to ensure that the corpus is representative of each chapter.  
+
+The following terminology is used in this document:
+
+- **Corpus**: A body of works as based on a search on [OpenAlex](https://openalex.org)
+- **Transformative Change Assessment Corpus**: Short: TCA corpus; The corpus resulting from the search terms `transformative AND nature`
+- **Case corpus**: The corpus resulting from `transformative AND nature AND case`
+- **work**: terminology used for a single document in their datasewt. Each work has a unique OpenAlex id, but not necesarily a DOI.
+
+The following searches are conducted on Title and Abstract only as the availability of fulltexts drops in 2020. OpenAlex "inherited" their initial corpus from Microsoft Academic, which contained a many fulltext articles. After that initial start, other sources were used which did not all include fulltext versions. To eliminate a bias towards fulltext articles, we limited the search to abstracts and titles only.
+
+## Schematic Overview
+
+*TODO — replace with a TCAC 2.0 pipeline diagram. The original
+PlantUML source lived under `tca_corpus/input/tca_corpus.plantuml` in
+TCAC 1.0; nothing equivalent exists in this repository yet.*
+
+
+## Search Terms {#sec-search_terms}
+Here are the search terms used in this document. They were provided by the authors, and some adaptations were done by the tsu for data and knowledge management to adapt them to be suitable for a search in OpenAlex.
+
+### Transformative Change {#sec-transform}
+
+```{r}
+#| label: st-tfc
+#| comment: ""
+cat(tar_read(tfc_st))
+```
+
+### Nature {#sec-nature}
+
+```{r}
+#| label: st-nature
+#| comment: ""
+cat(tar_read(nature_st))
+```
+
+### Assessment Corpus {#sec-tca-corpus}
+
+The combined `(nature) AND (transformative change)` query passed to OpenAlex:
+
+```{r}
+#| label: st-tca
+#| comment: ""
+cat(tar_read(tca_st))
+```
+
+# Results
+
+## Assessment of Search Terms Using OpenAlex
+
+### Number of Hits per Individual Corpus
+
+Number of works returned by each individual search-term query and by
+the combined `(nature) AND (transformative change)` query, before and
+after the OpenAlex work-type filter is applied (only the types in
+`input/openalex_types.csv` with `Included = TRUE` are kept).
+
+```{r}
+#| label: hits-per-search-term
+cnt <- readRDS(tar_read(count_st))
+
+# pro_request(count_only = TRUE) returns one row per query with `count`
+# and `query`; the query column carries the named list element name.
+labels <- c(
+  tfc_complete = "Transformative Change — all types",
+  tfc_filtered = "Transformative Change — filtered",
+  nature_complete = "Nature — all types",
+  nature_filtered = "Nature — filtered",
+  tca_complete = "Assessment Corpus (combined) — all types",
+  tca_filtered = "Assessment Corpus (combined) — filtered"
+)
+
+dplyr::tibble(
+  search = labels[as.character(cnt$query)],
+  count = as.integer(cnt$count)
+) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = "Number of works matching each search on OpenAlex. *filtered* applies the work-type filter; *all types* does not."
+  )
+```
+
+The actual TCAC 2.0 corpus extracted from the snapshot (after the
+type filter) has:
+
+```{r}
+#| label: tbl-corpus-size
+n_corpus <- nrow(arrow::open_dataset(tar_read(corpus_tcac20)))
+tibble::tibble(`Works extracted` = n_corpus) |>
+  knitr::kable(format.args = list(big.mark = ","))
+```
+
+<!--
+Per-sub-term breadth — DISABLED until the tfc_st input file is cleaned up.
+Combined `(other) AND (sub)` queries triggered HTTP 500s on OpenAlex.
+
+#### Per-sub-term breadth
+
+How broad is each individual line of each search term across the whole
+of OpenAlex? Each row is one sub-term standalone.
+
+```{r}
+#| label: tbl-assess-tfc
+#| eval: false
+tar_read(assess_tfc) |>
+  dplyr::arrange(dplyr::desc(count)) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = "Transformative-change sub-terms — hits across all of OpenAlex."
+  )
+```
+
+```{r}
+#| label: tbl-assess-nature
+#| eval: false
+tar_read(assess_nature) |>
+  dplyr::arrange(dplyr::desc(count)) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = "Nature sub-terms — hits across all of OpenAlex."
+  )
+```
+-->
+
+
+### Key papers in the corpus {#key_papers_in_corpus}
+
+Does the corpus actually cover the works the experts consider key? For
+each keypaper we check whether its OpenAlex id is present in the
+extracted corpus.
+
+#### Summary
+
+```{r}
+#| label: keypapers-in-corpus-summary
+kc <- tar_read(keypapers_in_corpus)
+tibble::tibble(
+  status = c("in corpus", "missing from corpus", "total keypapers"),
+  n = c(sum(kc$in_corpus), sum(!kc$in_corpus), nrow(kc)),
+  `%` = round(100 * c(mean(kc$in_corpus), mean(!kc$in_corpus), 1), 2)
+) |>
+  knitr::kable(
+    align = c("l", "r", "r"),
+    format.args = list(big.mark = ","),
+    caption = "Coverage of the keypaper set by the TCAC 2.0 corpus."
+  )
+```
+
+#### Detail
+
+Per-keypaper presence. Sorted in-corpus first, then by citation. Rows
+flagged red are missing from the corpus — candidates for revisiting the
+search terms (or the keypaper itself, if it's borderline off-topic).
+
+```{r}
+#| label: keypapers-in-corpus-detail
+kc |>
+  dplyr::mutate(
+    status = ifelse(
+      in_corpus,
+      "<span style='color:green'>in</span>",
+      "<span style='color:red'>missing</span>"
+    ),
+    doi = ifelse(
+      is.na(keypaper_doi) | !nzchar(keypaper_doi),
+      "",
+      sprintf(
+        "<a href='https://doi.org/%s' target='_blank'>%s</a>",
+        keypaper_doi,
+        keypaper_doi
+      )
+    )
+  ) |>
+  dplyr::select(
+    status,
+    citation = keypaper_citation,
+    title = keypaper_title,
+    doi
+  ) |>
+  knitr::kable(
+    format = "html",
+    escape = FALSE,
+    caption = "Per-keypaper presence in the TCAC 2.0 corpus."
+  )
+```
+
+## TCA Corpus properties
+
+
+### Publications over time
+
+Bars: yearly count of works in the TCAC 2.0 corpus. Red line:
+cumulative proportion of the corpus. Blue line: cumulative proportion
+of *all* of OpenAlex over the same year range — a useful baseline for
+"is the corpus skewing recent vs the literature as a whole?". Both
+cumulative lines use the secondary (right-hand) axis.
+
+```{r}
+#| label: publications-over-time
+years <- arrow::open_dataset(tar_read(corpus_tcac20)) |>
+  dplyr::count(publication_year) |>
+  dplyr::collect() |>
+  dplyr::filter(!is.na(publication_year), publication_year >= 1900) |>
+  dplyr::arrange(publication_year) |>
+  dplyr::mutate(
+    p = n / sum(n),
+    p_cum = cumsum(p)
+  )
+
+# OpenAlex universe baseline (from yearly_counts target, label =
+# "openalex_universe"). Recompute its cumulative proportion over the
+# same year window as the corpus so the two lines are comparable.
+oa_universe <- readRDS(tar_read(yearly_counts)) |>
+  dplyr::filter(
+    label == "openalex_universe",
+    publication_year %in% years$publication_year
+  ) |>
+  dplyr::arrange(publication_year) |>
+  dplyr::mutate(
+    p_oa = count / sum(count),
+    p_oa_cum = cumsum(p_oa)
+  ) |>
+  dplyr::select(publication_year, p_oa, p_oa_cum)
+
+ymax <- max(years$n)
+
+ggplot2::ggplot(years, ggplot2::aes(x = publication_year)) +
+  ggplot2::geom_col(ggplot2::aes(y = n), fill = "#BBBBBB") +
+  ggplot2::geom_line(
+    ggplot2::aes(y = p_cum * ymax),
+    colour = "red",
+    linewidth = 0.9
+  ) +
+  ggplot2::geom_line(
+    data = oa_universe,
+    mapping = ggplot2::aes(y = p_oa_cum * ymax),
+    colour = "blue",
+    linewidth = 0.9,
+    linetype = "dashed"
+  ) +
+  ggplot2::scale_y_continuous(
+    name = "Number of works per year (bars)",
+    sec.axis = ggplot2::sec_axis(
+      ~ . / ymax,
+      name = "Cumulative proportion (red = corpus, blue = OpenAlex universe)"
+    )
+  ) +
+  ggplot2::labs(x = "Publication year") +
+  ggplot2::theme_minimal(base_size = 12)
+```
+
+```{r}
+#| label: tbl-publications-over-time
+years |>
+  dplyr::left_join(oa_universe, by = "publication_year") |>
+  dplyr::mutate(dplyr::across(c(p, p_cum, p_oa, p_oa_cum), \(x) round(x, 4))) |>
+  knitr::kable(format.args = list(big.mark = ","))
+```
+
+# Comparison with TCAC 1.0
+
+How does the new TCAC 2.0 corpus differ from TCAC 1.0? Below we compare
+the two on three dimensions: works per OpenAlex type, keypaper presence,
+and the per-year change in coverage (works added in 2.0 vs works that
+were in 1.0 but no longer match in 2.0).
+
+```{r}
+#| label: compare-setup
+cmp <- tar_read(corpus_comparison)
+```
+
+## Works per type
+
+Per OpenAlex `type`, work count in each corpus and the difference
+(TCAC 2.0 minus TCAC 1.0). Sorted by TCAC 2.0 count. Negative diff
+(works lost) shown in red; positive (works gained) in green.
+
+```{r}
+#| label: tbl-cmp-types
+cmp$type_counts |>
+  dplyr::mutate(
+    diff = ifelse(
+      diff < 0,
+      sprintf(
+        "<span style='color:red'>%s</span>",
+        format(diff, big.mark = ",")
+      ),
+      sprintf(
+        "<span style='color:green'>+%s</span>",
+        format(diff, big.mark = ",")
+      )
+    ),
+    `tcac_1.0` = format(`tcac_1.0`, big.mark = ","),
+    `tcac_2.0` = format(`tcac_2.0`, big.mark = ",")
+  ) |>
+  knitr::kable(
+    format = "html", escape = FALSE,
+    align   = c("l", "r", "r", "r"),
+    caption = "Works per type in each corpus."
+  )
+```
+
+## Keypapers in each corpus
+
+For each keypaper, whether the OpenAlex id is present in TCAC 1.0 and /
+or in TCAC 2.0. Sorted with "in both" rows at the top.
+
+```{r}
+#| label: tbl-cmp-keypapers
+cmp$keypaper_presence |>
+  dplyr::mutate(
+    `TCAC 1.0` = ifelse(
+      in_tcac10,
+      "<span style='color:green'>✓</span>",
+      "<span style='color:red'>✗</span>"
+    ),
+    `TCAC 2.0` = ifelse(
+      in_tcac20,
+      "<span style='color:green'>✓</span>",
+      "<span style='color:red'>✗</span>"
+    )
+  ) |>
+  dplyr::transmute(
+    `TCAC 1.0`, `TCAC 2.0`,
+    citation, title
+  ) |>
+  knitr::kable(
+    format = "html", escape = FALSE,
+    caption = "Keypaper presence in each corpus."
+  )
+```
+
+## Publications over time — added, removed, kept
+
+Per-year change in corpus composition between the two extracts.
+*Added* (green, above zero) = works present in TCAC 2.0 but not in
+TCAC 1.0. *Removed* (red, below zero, drawn as negative counts so the
+visual is symmetric) = works present in TCAC 1.0 but not in TCAC 2.0.
+*Both* (grey backdrop) = works present in both — included to show the
+scale of the carried-over base, not the change.
+
+```{r}
+#| label: fig-cmp-yearly
+ys <- cmp$yearly_status |>
+  tidyr::pivot_wider(
+    names_from  = status,
+    values_from = n,
+    values_fill = 0L
+  ) |>
+  dplyr::rename(
+    removed = `removed (only in TCAC 1.0)`,
+    both    = `both`,
+    added   = `added (only in TCAC 2.0)`
+  ) |>
+  dplyr::mutate(removed_neg = -removed)
+
+ggplot2::ggplot(ys, ggplot2::aes(x = publication_year)) +
+  ggplot2::geom_col(
+    ggplot2::aes(y = both, fill = "both"),
+    width = 1, alpha = 0.35
+  ) +
+  ggplot2::geom_col(
+    ggplot2::aes(y = added, fill = "added (only in TCAC 2.0)"),
+    width = 1
+  ) +
+  ggplot2::geom_col(
+    ggplot2::aes(y = removed_neg, fill = "removed (only in TCAC 1.0)"),
+    width = 1
+  ) +
+  ggplot2::geom_hline(yintercept = 0, colour = "black", linewidth = 0.3) +
+  ggplot2::scale_fill_manual(
+    name   = NULL,
+    breaks = c(
+      "added (only in TCAC 2.0)",
+      "both",
+      "removed (only in TCAC 1.0)"
+    ),
+    values = c(
+      "added (only in TCAC 2.0)"   = "#59A14F",
+      "both"                       = "#999999",
+      "removed (only in TCAC 1.0)" = "#E15759"
+    )
+  ) +
+  ggplot2::scale_y_continuous(labels = \(x) format(abs(x), big.mark = ",")) +
+  ggplot2::labs(
+    x = "Publication year",
+    y = "Number of works"
+  ) +
+  ggplot2::theme_minimal(base_size = 12) +
+  ggplot2::theme(legend.position = "top")
+```
+
+```{r}
+#| label: tbl-cmp-yearly-summary
+cmp$yearly_status |>
+  dplyr::summarise(n = sum(n), .by = status) |>
+  dplyr::mutate(`%` = round(100 * n / sum(n), 2)) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = sprintf(
+      "Aggregate composition of the corpus change. TCAC 1.0: %s works; TCAC 2.0: %s works.",
+      format(cmp$n_tcac10, big.mark = ","),
+      format(cmp$n_tcac20, big.mark = ",")
+    )
+  )
+```

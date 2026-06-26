@@ -34,6 +34,7 @@ _freeze/
 *_files/
 *.html
 !README.html
+!TCAC 2.0 *Report.html
 *.pdf
 *.docx
 *.pptx

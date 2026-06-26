@@ -55,7 +55,7 @@ list(
     format = "file"
   ),
   tar_target(types_filter_fn, "input/openalex_types.csv", format = "file"),
-  tar_target(ids_tcac10_fn, "input/TCAC_1.0/ids.parquet", format = "file"),
+  tar_target(ids_tcac10, "input/TCAC_1.0/ids.parquet", format = "file"),
 
   # Search terms --------------------------------------------------------------
 
@@ -87,7 +87,14 @@ list(
 
   tar_target(
     count_st,
-    get_count(tfc_st, nature_st, types_filter, workers = workers),
+    get_count(tfc_st, nature_st, tca_st, types_filter, workers = workers),
+    format = "file"
+  ),
+
+  # Yearly counts on OpenAlex for the universe + each search bucket --------
+  tar_target(
+    yearly_counts,
+    get_yearly_counts(tfc_st, nature_st, tca_st),
     format = "file"
   ),
 
@@ -117,18 +124,41 @@ list(
     format = "file"
   ),
 
+  # Keypapers ∈ corpus? -------------------------------------------------------
+  # Per-keypaper flag indicating whether its OpenAlex id appears in the
+  # corpus extract. Drives the "key papers in corpus" section of the
+  # corpus report.
+  tar_target(
+    keypapers_in_corpus,
+    check_keypapers_in_corpus(key_works, corpus_tcac20),
+    format = qs2_format()
+  ),
+
+  # TCAC 1.0 vs 2.0 comparison: works-per-type, keypaper presence, and
+  # per-year added/removed/kept breakdown. Consumed inline by the
+  # Corpus Report.
+  tar_target(
+    corpus_comparison,
+    compare_corpora(
+      corpus_tcac10_path = corpus_tcac10,
+      corpus_tcac20_path = corpus_tcac20,
+      key_works_path     = key_works
+    ),
+    format = qs2_format()
+  ),
+
   # TCAC 1.0: Extract corpus from snapshot ------------------------------------
 
-  # tar_target(
-  #   corpus_tcac10_db,
-  #   get_corpus_from_snapshot(
-  #     ids_db = ids_tcac10_fn,
-  #     snapshot_dir = "input/snapshot",
-  #     project_folder = "output/TCAC_1.0/",
-  #     workers = workers
-  #   ),
-  #   format = "file"
-  # ),
+  tar_target(
+    corpus_tcac10,
+    get_corpus_from_snapshot(
+      ids_db = ids_tcac10,
+      snapshot_dir = "input/snapshot",
+      project_folder = "output/TCAC_1.0/",
+      workers = workers
+    ),
+    format = "file"
+  ),
 
   # Shared pilot subset (first emb_cfg$pilot_n rows of corpus extract) -------
 
@@ -426,17 +456,17 @@ list(
     viz_top_matches_per_kp,
     build_viz_top_matches_per_kp_data(
       scores_tcac20_title_abstract = scores_tcac20_title_abstract,
-      key_works                    = key_works,
-      corpus_tcac20                = corpus_tcac20
+      key_works = key_works,
+      corpus_tcac20 = corpus_tcac20
     ),
     format = qs2_format()
   ),
   tar_target(
     viz_text_length_data,
     build_viz_text_length_data(
-      corpus_tcac20      = corpus_tcac20,
+      corpus_tcac20 = corpus_tcac20,
       title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
-      sep_token          = emb_cfg$sep_token          %||% "[SEP]"
+      sep_token = emb_cfg$sep_token %||% "[SEP]"
     ),
     format = qs2_format()
   ),
@@ -505,14 +535,15 @@ list(
     build_viz_truncation_stats(
       corpus_tcac20,
       title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
-      sep_token          = emb_cfg$sep_token          %||% "[SEP]"
+      sep_token = emb_cfg$sep_token %||% "[SEP]"
     ),
     format = qs2_format()
   ),
   tar_target(
     viz_keypaper_score_dist_data,
     build_viz_keypaper_score_dist_data(
-      scores_tcac20_title_abstract, key_works
+      scores_tcac20_title_abstract,
+      key_works
     ),
     format = qs2_format()
   ),
@@ -524,11 +555,11 @@ list(
   tar_target(
     viz_emb_norm_data,
     build_viz_emb_norm_data(
-      emb_tcac20_title             = emb_tcac20_title,
-      emb_tcac20_abstract          = emb_tcac20_abstract,
-      emb_tcac20_title_abstract    = emb_tcac20_title_abstract,
-      emb_keypapers_title          = emb_keypapers_title,
-      emb_keypapers_abstract       = emb_keypapers_abstract,
+      emb_tcac20_title = emb_tcac20_title,
+      emb_tcac20_abstract = emb_tcac20_abstract,
+      emb_tcac20_title_abstract = emb_tcac20_title_abstract,
+      emb_keypapers_title = emb_keypapers_title,
+      emb_keypapers_abstract = emb_keypapers_abstract,
       emb_keypapers_title_abstract = emb_keypapers_title_abstract
     ),
     format = qs2_format()
@@ -645,6 +676,16 @@ list(
   tarchetypes::tar_quarto(
     report_vectorisation,
     path = "TCAC 2.0 Embedding Report.qmd",
+    quiet = TRUE
+  ),
+
+  # Render the corpus report. Re-builds whenever any of its tar_read()
+  # targets (search terms, count_st, yearly_counts, corpus_tcac20,
+  # key_works, keypapers_in_corpus, assess_*_in_tca) or the .qmd itself
+  # changes.
+  tarchetypes::tar_quarto(
+    report_corpus,
+    path = "TCAC 2.0 Corpus Report.qmd",
     quiet = TRUE
   ),
 
