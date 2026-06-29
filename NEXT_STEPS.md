@@ -2,7 +2,7 @@
 
 Living checklist of what's next. Updated as items land.
 
-Last updated: 2026-06-26.
+Last updated: 2026-06-29.
 
 ## 🚨 URGENT — first Path B BERTopic fit collapsed
 
@@ -42,6 +42,25 @@ caches), so retune cost ≈ full pod run (~50 min).
 ## Short-term — finish current Phase 1 cycle
 
 - [ ] **Retune the BERTopic fit** per the URGENT section above.
+
+- [ ] **Find clustering parameters that yield useful topics as a
+  base for other keypaper sets**. The retune above only gets us out
+  of the collapse; the production target is parameter values that
+  produce well-separated, interpretable topics so that *switching the
+  keypaper set later* (per
+  [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md)) reuses the
+  same UMAP+HDBSCAN fit and just re-projects the new keypapers. That
+  means once we land on a good parameterisation we should:
+  - Lock the bertopic config under a stable name (e.g.
+    `prod_runpod_v1`) in `input/config.yaml`.
+  - Capture the cfg-hash for the cached UMAP / HDBSCAN / c-TF-IDF
+    stages on R2 — those become the shared base across keypaper sets.
+  - Document the chosen parameter values + rationale in
+    [TD_BERTopic_Parameters.md](TD_BERTopic_Parameters.md).
+  Useful means roughly 200–500 well-separated topics, the topic-size
+  histogram (`fig_topic_sizes`, to be wired) is reasonably flat in
+  log-y, and the per-topic c-TF-IDF vocabulary reads as topical not
+  generic.
 
 - [ ] **Finalise visualisations** for the reports.
   - [ ] Wire `viz_umap_density` / `viz_umap_hulls` /
@@ -137,6 +156,12 @@ caches), so retune cost ≈ full pod run (~50 min).
 
 ## Done — most recent first
 
+- [x] **Corpus Report — folded comparison into Results**. Removed the
+  standalone "Comparison with TCAC 1.0" section; works-per-type and
+  keypaper-presence tables now appear once each under
+  `## TCA Corpus properties`, with TCAC 1.0 and 2.0 columns side-by-side.
+  Corpus-size table also shows both. The added/removed/kept yearly chart
+  lives as a sub-section under "Publications over time".
 - [x] **Corpus Report + TCAC 1.0 ↔ 2.0 comparison**
   (`TCAC 2.0 Corpus Report.qmd`, `corpus_comparison`,
   `keypapers_in_corpus`, `yearly_counts`).

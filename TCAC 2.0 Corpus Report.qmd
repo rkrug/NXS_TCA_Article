@@ -140,6 +140,12 @@ cat(tar_read(tca_st))
 
 # Results
 
+```{r}
+#| label: compare-setup
+#| include: false
+cmp <- tar_read(corpus_comparison)
+```
+
 ## Assessment of Search Terms Using OpenAlex
 
 ### Number of Hits per Individual Corpus
@@ -174,14 +180,19 @@ dplyr::tibble(
   )
 ```
 
-The actual TCAC 2.0 corpus extracted from the snapshot (after the
-type filter) has:
+The actual corpora extracted from the snapshot (after the type filter),
+compared with TCAC 1.0:
 
 ```{r}
 #| label: tbl-corpus-size
-n_corpus <- nrow(arrow::open_dataset(tar_read(corpus_tcac20)))
-tibble::tibble(`Works extracted` = n_corpus) |>
-  knitr::kable(format.args = list(big.mark = ","))
+tibble::tibble(
+  corpus = c("TCAC 1.0", "TCAC 2.0"),
+  `Works extracted` = c(cmp$n_tcac10, cmp$n_tcac20)
+) |>
+  knitr::kable(
+    align = c("l", "r"),
+    format.args = list(big.mark = ",")
+  )
 ```
 
 <!--
@@ -217,69 +228,100 @@ tar_read(assess_nature) |>
 -->
 
 
+## TCA Corpus properties
+
+### Works per type {#sec-works-per-type}
+
+Per OpenAlex `type`, work count in each corpus and the difference
+(TCAC 2.0 minus TCAC 1.0). Sorted by TCAC 2.0 count. Negative diff
+(works lost) shown in red; positive (works gained) in green.
+
+```{r}
+#| label: tbl-cmp-types
+cmp$type_counts |>
+  dplyr::mutate(
+    diff = ifelse(
+      diff < 0,
+      sprintf(
+        "<span style='color:red'>%s</span>",
+        format(diff, big.mark = ",")
+      ),
+      sprintf(
+        "<span style='color:green'>+%s</span>",
+        format(diff, big.mark = ",")
+      )
+    ),
+    `tcac_1.0` = format(`tcac_1.0`, big.mark = ","),
+    `tcac_2.0` = format(`tcac_2.0`, big.mark = ",")
+  ) |>
+  knitr::kable(
+    format = "html",
+    escape = FALSE,
+    align = c("l", "r", "r", "r"),
+    caption = "Works per type in each corpus."
+  )
+```
+
 ### Key papers in the corpus {#key_papers_in_corpus}
 
 Does the corpus actually cover the works the experts consider key? For
-each keypaper we check whether its OpenAlex id is present in the
-extracted corpus.
+each keypaper we check whether its OpenAlex id is present in TCAC 1.0
+and / or in the new TCAC 2.0 extract.
 
 #### Summary
 
 ```{r}
 #| label: keypapers-in-corpus-summary
-kc <- tar_read(keypapers_in_corpus)
+kp <- cmp$keypaper_presence
+n_kp <- nrow(kp)
 tibble::tibble(
   status = c("in corpus", "missing from corpus", "total keypapers"),
-  n = c(sum(kc$in_corpus), sum(!kc$in_corpus), nrow(kc)),
-  `%` = round(100 * c(mean(kc$in_corpus), mean(!kc$in_corpus), 1), 2)
+  `TCAC 1.0` = c(sum(kp$in_tcac10), sum(!kp$in_tcac10), n_kp),
+  `% 1.0` = round(100 * c(mean(kp$in_tcac10), mean(!kp$in_tcac10), 1), 2),
+  `TCAC 2.0` = c(sum(kp$in_tcac20), sum(!kp$in_tcac20), n_kp),
+  `% 2.0` = round(100 * c(mean(kp$in_tcac20), mean(!kp$in_tcac20), 1), 2)
 ) |>
   knitr::kable(
-    align = c("l", "r", "r"),
+    align = c("l", "r", "r", "r", "r"),
     format.args = list(big.mark = ","),
-    caption = "Coverage of the keypaper set by the TCAC 2.0 corpus."
+    caption = "Coverage of the keypaper set by each corpus."
   )
 ```
 
 #### Detail
 
-Per-keypaper presence. Sorted in-corpus first, then by citation. Rows
-flagged red are missing from the corpus — candidates for revisiting the
-search terms (or the keypaper itself, if it's borderline off-topic).
+Per-keypaper presence in TCAC 1.0 and TCAC 2.0. Sorted with "in both"
+rows at the top, then by citation. Rows flagged red are missing from
+that corpus — candidates for revisiting the search terms (or the
+keypaper itself, if it's borderline off-topic).
 
 ```{r}
 #| label: keypapers-in-corpus-detail
-kc |>
+cmp$keypaper_presence |>
   dplyr::mutate(
-    status = ifelse(
-      in_corpus,
-      "<span style='color:green'>in</span>",
-      "<span style='color:red'>missing</span>"
+    `TCAC 1.0` = ifelse(
+      in_tcac10,
+      "<span style='color:green'>✓</span>",
+      "<span style='color:red'>✗</span>"
     ),
-    doi = ifelse(
-      is.na(keypaper_doi) | !nzchar(keypaper_doi),
-      "",
-      sprintf(
-        "<a href='https://doi.org/%s' target='_blank'>%s</a>",
-        keypaper_doi,
-        keypaper_doi
-      )
+    `TCAC 2.0` = ifelse(
+      in_tcac20,
+      "<span style='color:green'>✓</span>",
+      "<span style='color:red'>✗</span>"
     )
   ) |>
-  dplyr::select(
-    status,
-    citation = keypaper_citation,
-    title = keypaper_title,
-    doi
+  dplyr::transmute(
+    `TCAC 1.0`,
+    `TCAC 2.0`,
+    citation,
+    title
   ) |>
   knitr::kable(
     format = "html",
     escape = FALSE,
-    caption = "Per-keypaper presence in the TCAC 2.0 corpus."
+    caption = "Keypaper presence in each corpus."
   )
 ```
-
-## TCA Corpus properties
-
 
 ### Publications over time
 
@@ -343,88 +385,7 @@ ggplot2::ggplot(years, ggplot2::aes(x = publication_year)) +
   ggplot2::theme_minimal(base_size = 12)
 ```
 
-```{r}
-#| label: tbl-publications-over-time
-years |>
-  dplyr::left_join(oa_universe, by = "publication_year") |>
-  dplyr::mutate(dplyr::across(c(p, p_cum, p_oa, p_oa_cum), \(x) round(x, 4))) |>
-  knitr::kable(format.args = list(big.mark = ","))
-```
-
-# Comparison with TCAC 1.0
-
-How does the new TCAC 2.0 corpus differ from TCAC 1.0? Below we compare
-the two on three dimensions: works per OpenAlex type, keypaper presence,
-and the per-year change in coverage (works added in 2.0 vs works that
-were in 1.0 but no longer match in 2.0).
-
-```{r}
-#| label: compare-setup
-cmp <- tar_read(corpus_comparison)
-```
-
-## Works per type
-
-Per OpenAlex `type`, work count in each corpus and the difference
-(TCAC 2.0 minus TCAC 1.0). Sorted by TCAC 2.0 count. Negative diff
-(works lost) shown in red; positive (works gained) in green.
-
-```{r}
-#| label: tbl-cmp-types
-cmp$type_counts |>
-  dplyr::mutate(
-    diff = ifelse(
-      diff < 0,
-      sprintf(
-        "<span style='color:red'>%s</span>",
-        format(diff, big.mark = ",")
-      ),
-      sprintf(
-        "<span style='color:green'>+%s</span>",
-        format(diff, big.mark = ",")
-      )
-    ),
-    `tcac_1.0` = format(`tcac_1.0`, big.mark = ","),
-    `tcac_2.0` = format(`tcac_2.0`, big.mark = ",")
-  ) |>
-  knitr::kable(
-    format = "html", escape = FALSE,
-    align   = c("l", "r", "r", "r"),
-    caption = "Works per type in each corpus."
-  )
-```
-
-## Keypapers in each corpus
-
-For each keypaper, whether the OpenAlex id is present in TCAC 1.0 and /
-or in TCAC 2.0. Sorted with "in both" rows at the top.
-
-```{r}
-#| label: tbl-cmp-keypapers
-cmp$keypaper_presence |>
-  dplyr::mutate(
-    `TCAC 1.0` = ifelse(
-      in_tcac10,
-      "<span style='color:green'>✓</span>",
-      "<span style='color:red'>✗</span>"
-    ),
-    `TCAC 2.0` = ifelse(
-      in_tcac20,
-      "<span style='color:green'>✓</span>",
-      "<span style='color:red'>✗</span>"
-    )
-  ) |>
-  dplyr::transmute(
-    `TCAC 1.0`, `TCAC 2.0`,
-    citation, title
-  ) |>
-  knitr::kable(
-    format = "html", escape = FALSE,
-    caption = "Keypaper presence in each corpus."
-  )
-```
-
-## Publications over time — added, removed, kept
+#### Added, removed, kept (vs TCAC 1.0)
 
 Per-year change in corpus composition between the two extracts.
 *Added* (green, above zero) = works present in TCAC 2.0 but not in
@@ -437,21 +398,22 @@ scale of the carried-over base, not the change.
 #| label: fig-cmp-yearly
 ys <- cmp$yearly_status |>
   tidyr::pivot_wider(
-    names_from  = status,
+    names_from = status,
     values_from = n,
     values_fill = 0L
   ) |>
   dplyr::rename(
     removed = `removed (only in TCAC 1.0)`,
-    both    = `both`,
-    added   = `added (only in TCAC 2.0)`
+    both = `both`,
+    added = `added (only in TCAC 2.0)`
   ) |>
   dplyr::mutate(removed_neg = -removed)
 
 ggplot2::ggplot(ys, ggplot2::aes(x = publication_year)) +
   ggplot2::geom_col(
     ggplot2::aes(y = both, fill = "both"),
-    width = 1, alpha = 0.35
+    width = 1,
+    alpha = 0.35
   ) +
   ggplot2::geom_col(
     ggplot2::aes(y = added, fill = "added (only in TCAC 2.0)"),
@@ -463,15 +425,15 @@ ggplot2::ggplot(ys, ggplot2::aes(x = publication_year)) +
   ) +
   ggplot2::geom_hline(yintercept = 0, colour = "black", linewidth = 0.3) +
   ggplot2::scale_fill_manual(
-    name   = NULL,
+    name = NULL,
     breaks = c(
       "added (only in TCAC 2.0)",
       "both",
       "removed (only in TCAC 1.0)"
     ),
     values = c(
-      "added (only in TCAC 2.0)"   = "#59A14F",
-      "both"                       = "#999999",
+      "added (only in TCAC 2.0)" = "#59A14F",
+      "both" = "#999999",
       "removed (only in TCAC 1.0)" = "#E15759"
     )
   ) +
