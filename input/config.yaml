@@ -4,8 +4,8 @@ sample_size: 10000
 embeddings:
   # Which entry under configs: is active for this pipeline run. The active
   # name is also used as the `config=` hive-partition value under
-  # output/TCAC_2.0/embeddings/, so different models live side-by-side on
-  # disk.
+  # input/embeddings/ (fork: embeddings are static/keypaper-live inputs),
+  # so different models live side-by-side on disk.
   active: SPECTER2_runpod
 
   configs:
@@ -32,7 +32,7 @@ embeddings:
     # RunPod-hosted TEI on a rented L40s/A100/H100. Flip embeddings.active above and
     # populate host/auth before use. See scripts/start_tei_runpod.sh.
     SPECTER2_runpod:
-      host: 0odyifh86m5qex-8080.proxy.runpod.net
+      host: jxg8wguztasqdd-8080.proxy.runpod.net
       port: 443
       scheme: https
       # auth_token_keyring: API_TEI   # keyring::key_set("API_TEI") first
@@ -70,9 +70,9 @@ embeddings:
 # by R/run_bertopic_runpod.R.
 r2:
   endpoint:                26e6e95ff86cfcd155724000d2cdfbba.r2.cloudflarestorage.com
-  bucket:                  tcac-2-0
+  bucket:                  reimagine-tfc
   region:                  auto
-  embeddings_local_root:   output/TCAC_2.0/embeddings
+  embeddings_local_root:   input/embeddings
   embeddings_remote_prefix: embeddings
   # Credentials never live here. Laptop uses rclone's config; the pod
   # gets them as RunPod Secrets (template env vars):

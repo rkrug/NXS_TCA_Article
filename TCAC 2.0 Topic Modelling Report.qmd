@@ -315,19 +315,14 @@ kp_topics <- arrow::open_dataset(file.path(topics_dir, "topics.parquet")) |>
   dplyr::select(id, topic_id, topic_source) |>
   dplyr::collect()
 
-# Bring in keypaper titles via the existing keypapers_in_corpus target.
-kc <- tar_read(keypapers_in_corpus)
+# Bring in keypaper titles directly from key_works.
+kc <- arrow::open_dataset(tar_read(key_works)) |>
+  dplyr::select(id, title) |>
+  dplyr::collect() |>
+  dplyr::mutate(citation = title)
 
 kp_topics |>
-  dplyr::left_join(
-    kc |>
-      dplyr::select(
-        id = keypaper_id,
-        title = keypaper_title,
-        citation = keypaper_citation
-      ),
-    by = "id"
-  ) |>
+  dplyr::left_join(kc, by = "id") |>
   dplyr::left_join(
     ti |> dplyr::select(topic_id, topic_name = label, is_relevant),
     by = "topic_id"

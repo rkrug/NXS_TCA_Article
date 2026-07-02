@@ -63,7 +63,11 @@ read_embeddings <- function(config_dir) {
   arrow::open_dataset(config_dir) |> dplyr::collect()
 }
 
-read_scores_long <- function(scores_tcac20_title_abstract) {
+read_scores_long <- function(
+  scores_tcac20_title,
+  scores_tcac20_abstract,
+  scores_tcac20_title_abstract
+) {
   # SLIM long form: one row per (id, variant) with max similarity across
   # all keypaper columns. Replaces the previous full wide->long pivot,
   # which produced ~600M rows (5.77M × 105 keypapers) and OOM'd at full
@@ -71,27 +75,26 @@ read_scores_long <- function(scores_tcac20_title_abstract) {
   # TODO_Visualisations.md §1.
   #
   # Implementation: a single duckdb query per variant parquet, using
-  # GREATEST(col1, col2, ..., colN) over the https:// columns. Streams
-  # via duckdb — no full matrix lands in R memory.
+  # GREATEST(col1, col2, ..., colN) over the keypaper score columns.
+  # Streams via duckdb — no full matrix lands in R memory.
+  #
+  # Takes all three variant score paths explicitly (rather than scanning
+  # the shared config directory for sibling files) so `targets` sees the
+  # real dependency edges — otherwise nothing guarantees
+  # scores_tcac20_title/abstract are built before this target runs, and
+  # viz_agree_data (which needs all three variants) can silently see a
+  # partial result.
   if (
     !requireNamespace("duckdb", quietly = TRUE) ||
       !requireNamespace("DBI", quietly = TRUE)
   ) {
     stop("Packages 'duckdb' and 'DBI' are required for read_scores_long().")
   }
-  scores_root <- normalizePath(
-    file.path(scores_tcac20_title_abstract, "..", ".."),
-    mustWork = TRUE
+  files <- c(
+    scores_tcac20_title,
+    scores_tcac20_abstract,
+    scores_tcac20_title_abstract
   )
-  files <- list.files(
-    scores_root,
-    pattern = "pairwise-cosine\\.parquet$",
-    recursive = TRUE,
-    full.names = TRUE
-  )
-  if (!length(files)) {
-    stop("No pairwise-cosine.parquet under ", scores_root)
-  }
 
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(
@@ -106,9 +109,13 @@ read_scores_long <- function(scores_tcac20_title_abstract) {
       con,
       sprintf("SELECT * FROM read_parquet('%s') LIMIT 0", f)
     ))
-    score_cols <- grep("^https://", cols, value = TRUE)
+    # duckdb infers hive-partition columns (config, variant) from the path's
+    # key=value segments even for a literal single-file read, not just
+    # directory scans — exclude them alongside id so GREATEST() only sees
+    # the numeric keypaper score columns.
+    score_cols <- setdiff(cols, c("id", "config", "variant"))
     if (!length(score_cols)) {
-      stop("No https:// score columns in ", f)
+      stop("No keypaper score columns in ", f)
     }
     greatest_expr <- sprintf(
       "GREATEST(%s)",
@@ -462,13 +469,13 @@ build_viz_top_matches_per_kp_data <- function(
 ) {
   scores_root <- file.path(scores_tcac20_title_abstract, "..", "..")
 
-  # Read keypaper id list once (every https:// score column is a keypaper id)
+  # Read keypaper id list once (every non-metadata column is a keypaper id)
   cols <- names(
     arrow::open_dataset(scores_root) |>
       head(0) |>
       dplyr::collect()
   )
-  kp_cols <- grep("^https://", cols, value = TRUE)
+  kp_cols <- setdiff(cols, c("id", "variant"))
   set.seed(seed)
   picked <- sort(sample(kp_cols, min(n_keypapers, length(kp_cols))))
 
@@ -481,7 +488,7 @@ build_viz_top_matches_per_kp_data <- function(
 
   # Lookups for human-readable output
   kp_meta <- arrow::open_dataset(key_works) |>
-    dplyr::select(id, title, citation) |>
+    dplyr::select(id, title) |>
     dplyr::filter(id %in% picked) |>
     dplyr::collect()
   corpus_meta <- arrow::open_dataset(corpus_tcac20) |>
@@ -496,7 +503,7 @@ build_viz_top_matches_per_kp_data <- function(
     tibble::tibble(
       keypaper_id = kp,
       keypaper_title = kp_meta$title[match(kp, kp_meta$id)],
-      keypaper_citation = kp_meta$citation[match(kp, kp_meta$id)],
+      keypaper_citation = kp_meta$title[match(kp, kp_meta$id)],
       rank = seq_len(n_matches),
       match_id = match_ids,
       match_title = corpus_meta$title[match(match_ids, corpus_meta$id)],
@@ -1060,7 +1067,8 @@ build_viz_keypaper_score_dist_data <- function(
   }
 
   cols <- names(arrow::open_dataset(f) |> head(0) |> dplyr::collect())
-  kp_cols <- grep("^https://", cols, value = TRUE)
+  # See read_scores_long() for why config/variant are excluded alongside id.
+  kp_cols <- setdiff(cols, c("id", "config", "variant"))
 
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(
@@ -1096,10 +1104,11 @@ build_viz_keypaper_score_dist_data <- function(
   stats <- long |>
     tidyr::pivot_wider(names_from = stat, values_from = value)
 
-  # Lookup citation + title for the keypaper
+  # Lookup title + link for the keypaper
   meta <- arrow::open_dataset(key_works) |>
-    dplyr::select(id, title, citation) |>
-    dplyr::collect()
+    dplyr::select(id, title, link) |>
+    dplyr::collect() |>
+    dplyr::mutate(citation = title)
 
   stats |>
     dplyr::left_join(meta, by = c("keypaper_id" = "id")) |>
@@ -1118,10 +1127,15 @@ build_viz_keypaper_score_dist_fig <- function(
     paste0(d$y_pos, ". ", d$citation)
   )
   d$label_short <- substr(d$label, 1, 90)
-  d$tick_html <- sprintf(
-    '<a href="%s" target="_blank" rel="noopener">%s</a>',
-    d$keypaper_id,
-    htmltools::htmlEscape(d$label_short)
+  d$href <- ifelse(is.na(d$link) | !nzchar(d$link), NA_character_, d$link)
+  d$tick_html <- ifelse(
+    is.na(d$href),
+    htmltools::htmlEscape(d$label_short),
+    sprintf(
+      '<a href="%s" target="_blank" rel="noopener">%s</a>',
+      d$href,
+      htmltools::htmlEscape(d$label_short)
+    )
   )
   hover <- sprintf(
     "%s<br>median = %.3f<br>q05 = %.3f  q95 = %.3f<br>q25 = %.3f  q75 = %.3f<br>n = %s",
@@ -1408,7 +1422,7 @@ viz_umap_data <- function(
   ) |>
     dplyr::filter(variant == variant_filter, id %in% keep_ids) |>
     dplyr::collect()
-  score_cols <- grep("^https://", names(scored), value = TRUE)
+  score_cols <- setdiff(names(scored), c("id", "variant"))
   max_sim_per_id <- tibble::tibble(
     id = scored$id,
     max_sim = apply(
@@ -1434,7 +1448,7 @@ viz_umap_data <- function(
       dplyr::select(id, citation) |>
       dplyr::collect(),
     arrow::open_dataset(key_works) |>
-      dplyr::select(id, citation) |>
+      dplyr::select(id, citation = title) |>
       dplyr::collect()
   ) |>
     dplyr::distinct(id, .keep_all = TRUE)
@@ -1480,7 +1494,7 @@ viz_umap_best_kp <- function(
   ) |>
     dplyr::filter(variant == variant_filter, id %in% visible_ids) |>
     dplyr::collect()
-  ref_cols <- grep("^https://", names(scores_v), value = TRUE)
+  ref_cols <- setdiff(names(scores_v), c("id", "variant"))
   mtx <- as.matrix(scores_v[, ref_cols])
   best_idx <- max.col(mtx, ties.method = "first")
 

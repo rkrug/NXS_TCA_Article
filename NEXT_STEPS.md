@@ -42,20 +42,20 @@ reference input.
   Diagnosis complete (see above). No further BERTopic tuning planned
   until the key-definitions approach is in place.
 
-- [ ] **Implement key definitions as a reference set**. Concept
-  definitions structured as `(id, title, abstract)` — title = concept
-  name, abstract = definition + clarification — embedded via the same
-  TEI/SPECTER2 server and scored against the full corpus using
-  `score_keypapers()`. These are external documents (not in the
-  corpus). Steps:
-  - Store definitions in `input/key definitions/` as a structured
-    table (`.csv` or `.rds`).
-  - Add embed + score targets in `_targets.R` parallel to the
-    existing keypaper targets.
-  - `keypapers_in_corpus` is irrelevant for external definitions;
-    skip or suppress for this set.
-  - See [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md) for
-    the multi-set architecture.
+- [x] **Implement key definitions as a reference set** — landed, though the
+  actual shape differs from what was originally sketched below: instead of
+  a separate parallel "definitions" set alongside the existing keypapers,
+  the keypaper input itself (`input/key papers/key_papers.csv`) was
+  replaced with a single unified table mixing academic papers and
+  non-paper "concept"/case-study entries (`id, title, abstract, link,
+  type`), built by `prepare_key_works()` (`R/prepare_key_works.R`) and fed
+  straight into the existing `emb_keypapers_*` / `score_keypapers()`
+  targets — no separate `input/key definitions/` dir or parallel targets
+  needed. `keypapers_in_corpus` (the in-corpus check, meaningless for
+  non-OpenAlex concept entries) was removed entirely rather than
+  skipped/suppressed per-set. See [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md)
+  if a true multi-set architecture (several coexisting keypaper sets) is
+  wanted later.
 
 - [ ] **Finalise visualisations** for the reports.
   - [ ] Wire `viz_umap_density` / `viz_umap_hulls` /
@@ -73,8 +73,8 @@ reference input.
     [TCAC 2.0 Embedding Report.qmd](TCAC 2.0 Embedding Report.qmd) with
     the retuned Path B topics.
   - [ ] Re-render
-    [TCAC 2.0 Corpus Report.qmd](TCAC 2.0 Corpus Report.qmd) once
-    `corpus_tcac10` + `corpus_comparison` finish.
+    [TCAC 2.0 Corpus Report.qmd](TCAC 2.0 Corpus Report.qmd)
+    (TCAC 1.0 comparison removed in this fork).
   - [ ] Spot-check accessibility (alt text, contrast for the polygon
     layer).
 

@@ -21,7 +21,7 @@ variant_name <- if (length(args) >= 1L) args[[1]] else "abstract"
 config_name  <- if (length(args) >= 2L) args[[2]] else "SPECTER2_runpod"
 source_name  <- if (length(args) >= 3L) args[[3]] else "corpus"
 
-out_root <- "output/TCAC_2.0/embeddings"
+out_root <- "input/embeddings"  # fork: embeddings live under input/
 cat(sprintf("[%s|%s|%s] consolidating from .raw scratch shards\n",
             config_name, source_name, variant_name))
 

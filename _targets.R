@@ -50,12 +50,11 @@ list(
     format = "file"
   ),
   tar_target(
-    kp_tcac10_fn,
-    "input/key papers/key_papers_TCAC_1.0.rds",
+    kp_raw_fn,
+    "input/key papers/key_papers.csv",
     format = "file"
   ),
   tar_target(types_filter_fn, "input/openalex_types.csv", format = "file"),
-  tar_target(ids_tcac10, "input/TCAC_1.0/ids.parquet", format = "file"),
 
   # Search terms --------------------------------------------------------------
 
@@ -75,11 +74,7 @@ list(
 
   tar_target(
     key_works,
-    get_key_works(
-      kp_tcac10_fn,
-      project_folder = "output/TCAC_2.0/",
-      workers = workers
-    ),
+    prepare_key_works(kp_raw_fn),
     format = "file"
   ),
 
@@ -98,127 +93,51 @@ list(
     format = "file"
   ),
 
-  # TCAC 2.0: Get IDs ---------------------------------------------------------
-
-  tar_target(
-    ids_tcac20,
-    get_tcac20_ids(
-      st = tca_st,
-      tf = types_filter,
-      project_folder = "output/TCAC_2.0/",
-      workers = workers
-    ),
-    format = "file"
-  ),
-
-  # TCAC 2.0: Extract corpus from snapshot ------------------------------------
+  # TCAC 2.0 corpus — STATIC INPUT (fork) -------------------------------------
+  # Frozen clone of the upstream TCAC 2.0 corpus, moved into input/ and never
+  # re-extracted here. The upstream `TCAC 2.0` repo owns corpus generation;
+  # this fork only consumes it. (Upstream: ids_tcac20 -> get_corpus_from_snapshot.)
 
   tar_target(
     corpus_tcac20,
-    get_corpus_from_snapshot(
-      ids_db = ids_tcac20,
-      snapshot_dir = "input/snapshot",
-      project_folder = "output/TCAC_2.0/",
-      workers = workers
-    ),
+    "input/corpus",
     format = "file"
   ),
 
-  # Keypapers ∈ corpus? -------------------------------------------------------
-  # Per-keypaper flag indicating whether its OpenAlex id appears in the
-  # corpus extract. Drives the "key papers in corpus" section of the
-  # corpus report.
-  tar_target(
-    keypapers_in_corpus,
-    check_keypapers_in_corpus(key_works, corpus_tcac20),
-    format = qs2_format()
-  ),
-
-  # TCAC 1.0 vs 2.0 comparison: works-per-type, keypaper presence, and
-  # per-year added/removed/kept breakdown. Consumed inline by the
-  # Corpus Report.
-  tar_target(
-    corpus_comparison,
-    compare_corpora(
-      corpus_tcac10_path = corpus_tcac10,
-      corpus_tcac20_path = corpus_tcac20,
-      key_works_path = key_works
-    ),
-    format = qs2_format()
-  ),
-
-  # TCAC 1.0: Extract corpus from snapshot ------------------------------------
-
-  tar_target(
-    corpus_tcac10,
-    get_corpus_from_snapshot(
-      ids_db = ids_tcac10,
-      snapshot_dir = "input/snapshot",
-      project_folder = "output/TCAC_1.0/",
-      workers = workers
-    ),
-    format = "file"
-  ),
-
-  # Shared pilot subset (first emb_cfg$pilot_n rows of corpus extract) -------
-
-  tar_target(
-    pilot_corpus_tcac20,
-    make_pilot_subset(
-      corpus_path = corpus_tcac20,
-      out_dir = file.path(
-        "output/TCAC_2.0",
-        paste0("pilot_n", emb_cfg$pilot_n)
-      ),
-      n = emb_cfg$pilot_n
-    ),
-    format = "file"
-  ),
-
-  # TCAC 2.0 corpus embeddings → source=corpus, one target per variant -------
-  # Each owns its own (config, source, variant) leaf partition; independent
-  # invalidation. embed_works() has a skip guard: existing parquet rows in the
-  # leaf → return without TEI, so prior runs are registered without rebuild.
+  # TCAC 2.0 corpus embeddings — STATIC INPUT (fork) -------------------------
+  # Frozen clones of the upstream SPECTER2 corpus embeddings, moved into
+  # input/embeddings and never recomputed here. One file target per variant,
+  # laid out as config=<emb_name>/source=corpus/variant=<v> so downstream
+  # dirname() resolution is identical to the upstream producer shape.
+  # (Upstream: embed_works(source="corpus") into output/TCAC_2.0/embeddings.)
 
   tar_target(
     emb_tcac20_title,
-    embed_works(
-      corpus_path = pilot_corpus_tcac20,
-      out_dir = "output/TCAC_2.0/embeddings",
-      source = "corpus",
-      config_name = emb_name,
-      cfg = emb_cfg,
-      variant_name = "title",
-      preprocessor = variant_preprocessor("title", emb_cfg)$prep,
-      preprocessor_args = variant_preprocessor("title", emb_cfg)$args
+    file.path(
+      "input/embeddings",
+      paste0("config=", emb_name),
+      "source=corpus",
+      "variant=title"
     ),
     format = "file"
   ),
   tar_target(
     emb_tcac20_abstract,
-    embed_works(
-      corpus_path = pilot_corpus_tcac20,
-      out_dir = "output/TCAC_2.0/embeddings",
-      source = "corpus",
-      config_name = emb_name,
-      cfg = emb_cfg,
-      variant_name = "abstract",
-      preprocessor = variant_preprocessor("abstract", emb_cfg)$prep,
-      preprocessor_args = variant_preprocessor("abstract", emb_cfg)$args
+    file.path(
+      "input/embeddings",
+      paste0("config=", emb_name),
+      "source=corpus",
+      "variant=abstract"
     ),
     format = "file"
   ),
   tar_target(
     emb_tcac20_title_abstract,
-    embed_works(
-      corpus_path = pilot_corpus_tcac20,
-      out_dir = "output/TCAC_2.0/embeddings",
-      source = "corpus",
-      config_name = emb_name,
-      cfg = emb_cfg,
-      variant_name = "title_abstract",
-      preprocessor = variant_preprocessor("title_abstract", emb_cfg)$prep,
-      preprocessor_args = variant_preprocessor("title_abstract", emb_cfg)$args
+    file.path(
+      "input/embeddings",
+      paste0("config=", emb_name),
+      "source=corpus",
+      "variant=title_abstract"
     ),
     format = "file"
   ),
@@ -229,7 +148,7 @@ list(
     emb_keypapers_title,
     embed_works(
       corpus_path = key_works,
-      out_dir = "output/TCAC_2.0/embeddings",
+      out_dir = "input/embeddings",
       source = "keypaper",
       config_name = emb_name,
       cfg = emb_cfg,
@@ -243,7 +162,7 @@ list(
     emb_keypapers_abstract,
     embed_works(
       corpus_path = key_works,
-      out_dir = "output/TCAC_2.0/embeddings",
+      out_dir = "input/embeddings",
       source = "keypaper",
       config_name = emb_name,
       cfg = emb_cfg,
@@ -257,7 +176,7 @@ list(
     emb_keypapers_title_abstract,
     embed_works(
       corpus_path = key_works,
-      out_dir = "output/TCAC_2.0/embeddings",
+      out_dir = "input/embeddings",
       source = "keypaper",
       config_name = emb_name,
       cfg = emb_cfg,
@@ -412,7 +331,11 @@ list(
   # the columns it needs via arrow pushdown. See TODO_Visualisations.md §1.
   tar_target(
     viz_scores_long,
-    read_scores_long(scores_tcac20_title_abstract),
+    read_scores_long(
+      scores_tcac20_title,
+      scores_tcac20_abstract,
+      scores_tcac20_title_abstract
+    ),
     format = qs2_format()
   ),
   tar_target(
@@ -679,20 +602,9 @@ list(
     quiet = TRUE
   ),
 
-  # Render the corpus report. Re-builds whenever any of its tar_read()
-  # targets (search terms, count_st, yearly_counts, corpus_tcac20,
-  # key_works, keypapers_in_corpus, assess_*_in_tca) or the .qmd itself
-  # changes.
-  tarchetypes::tar_quarto(
-    report_corpus,
-    path = "TCAC 2.0 Corpus Report.qmd",
-    quiet = TRUE
-  ),
-
   # Render the Topic Modelling Report. Re-builds whenever any of its tar_read()
   # targets (search terms, count_st, yearly_counts, corpus_tcac20,
-  # key_works, keypapers_in_corpus, assess_*_in_tca) or the .qmd itself
-  # changes.
+  # key_works, assess_*_in_tca) or the .qmd itself changes.
   tarchetypes::tar_quarto(
     report_topic_modelling,
     path = "TCAC 2.0 Topic Modelling Report.qmd",

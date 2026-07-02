@@ -20,6 +20,37 @@ The OpenAlex snapshot used is `RELEASE 2026-01-15`. All metadata is
 extracted from this local snapshot (not the live API) to ensure
 consistency between TCAC 1.0 and TCAC 2.0.
 
+> **Fork note (`Reimagening_TFC`).** This repo is a keypaper-swap fork of
+> the upstream `TCAC 2.0` repo (`/Volumes/GitHub/TCAC 2.0/`). Its purpose
+> is to re-run the keypaper-dependent stages against a *different keypaper
+> set* while **reusing the upstream corpus and corpus embeddings unchanged**.
+> To that end the corpus + corpus-embeddings are treated as **static inputs**,
+> not pipeline outputs:
+> - `input/corpus/` and `input/embeddings/config=SPECTER2_runpod/source=corpus/`
+>   are **APFS clones of the upstream artefacts, frozen read-only**. The
+>   targets `corpus_tcac20` and `emb_tcac20_{title,abstract,title_abstract}`
+>   are plain `format="file"` targets pointing at those paths — they never
+>   recompute. `ids_tcac20`, `pilot_corpus_tcac20`, and the corpus call to
+>   `get_corpus_from_snapshot()` were removed. (`embed_works()` /
+>   `get_corpus_from_snapshot()` still carry read-only guards as a backstop.)
+> - `input/embeddings/config=SPECTER2_runpod/source=keypaper/` is **writable**
+>   and stays **live**: `emb_keypapers_*` still run `embed_works(out_dir=
+>   "input/embeddings")`, so a changed keypaper set is re-embedded. Corpus and
+>   keypaper embeddings share one config dir, which `score_keypapers()`
+>   requires. `output/TCAC_2.0/{scores,topics}/` are writable (regenerated).
+> - The R2 bucket is **`reimagine-tfc`** — a dedicated full copy (Cloudflare
+>   Super Slurper) of upstream's `tcac-2-0` bucket, including both
+>   `embeddings/` and the `intermediate/` BERTopic stage cache. Same account
+>   /endpoint as upstream, different bucket, so there is no shared-prefix
+>   collision: this fork can freely overwrite its own `source=keypaper`
+>   objects as the keypaper set changes without touching upstream's data.
+>   The BERTopic intermediate cache (keyed by `config=<name>/umap_cfg=<hash>/
+>   hdbscan_cfg=<hash>/…`) was copied too, so cache hits are preserved for
+>   unchanged UMAP/HDBSCAN params. `r2.embeddings_local_root` points at
+>   `input/embeddings` so the RunPod path→s3 translation still resolves.
+> - **TCAC 1.0 has been removed** from this fork (comparison stage, inputs,
+>   `compare_corpora()`, and Corpus Report comparison sections).
+
 ## Pipeline Architecture
 
 The pipeline is orchestrated with the
@@ -29,23 +60,21 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
 ### Pipeline stages (each block invalidates independently)
 
 1. **Inputs** (`input/`) — search-term `.txt` files, keypapers `.rds`,
-   work-type filter `.csv`, OpenAlex snapshot dir, TCAC 1.0 IDs parquet.
+   work-type filter `.csv`, OpenAlex snapshot dir.
 2. **Search-term assembly** — `tfc_st`, `nature_st`, `tca_st`
    (combined as `(nature) AND (transformative change)`).
 3. **OpenAlex statistics** — `count_st` (hit counts per individual and
    combined search), `yearly_counts` (publication-year buckets for the
    universe + each search bucket).
-4. **Corpus extraction** — `ids_tcac20` from OpenAlex matching the
-   combined search + type filter; `corpus_tcac20` (and `corpus_tcac10`)
-   from the local snapshot. `keypapers_in_corpus` flags which keypapers
-   the search recovered.
-5. **Comparison** — `corpus_comparison` (TCAC 1.0 vs 2.0:
-   works-per-type, keypaper presence, added/removed/kept per year).
-6. **Embeddings** — `embed_works()` produces 6 targets:
-   `emb_{tcac20,keypapers}_{title,abstract,title_abstract}`. Backed by
-   a self-hosted TEI server with SPECTER2; embeddings stored as parquet
-   under `output/TCAC_2.0/embeddings/config=…/source=…/variant=…/`.
-   Mirrored to Cloudflare R2 for the RunPod BERTopic dispatch (see
+4. **Corpus** — `corpus_tcac20` is a **static input** (`input/corpus`,
+   a frozen clone of the upstream corpus; not re-extracted in this fork).
+6. **Embeddings** — `emb_tcac20_{title,abstract,title_abstract}` are
+   **static input** targets pointing at the frozen corpus-embedding clones
+   under `input/embeddings/config=…/source=corpus/variant=…/`.
+   `emb_keypapers_{…}` stay **live**: `embed_works()` (self-hosted TEI +
+   SPECTER2) writes them to `input/embeddings/…/source=keypaper/…`, so a
+   changed keypaper set is re-embedded. Corpus embeddings are mirrored to
+   Cloudflare R2 for the RunPod BERTopic dispatch (see
    `scripts/sync_embeddings_to_r2.sh`).
 7. **Keypaper similarity** — `score_keypapers()` per variant, chunked
    per parquet file to avoid OOM. Output: `pairwise-cosine.parquet`
@@ -59,11 +88,18 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
    under `R/build_visualisations.R`. Score distributions, UMAP scatter,
    topic overlays, per-keypaper diagnostics. Most consumers read narrow
    slices via arrow pushdown rather than materialising the full corpus.
-10. **Reports** — two Quarto reports rendered as `tar_quarto` targets:
+10. **Reports** — Quarto reports rendered as `tar_quarto` targets:
     - `report_vectorisation` → `TCAC 2.0 Embedding Report.qmd`
       (corpus stats, embedding quality, keypaper coherence).
-    - `report_corpus` → `TCAC 2.0 Corpus Report.qmd`
-      (search terms, keypaper coverage, TCAC 1.0 vs 2.0 comparison).
+    - `report_topic_modelling` → `TCAC 2.0 Topic Modelling Report.qmd`
+      (BERTopic diagnostics, keypaper coverage per topic).
+
+    `TCAC 2.0 Corpus Report.qmd` is no longer auto-rendered by the
+    pipeline (its `report_corpus` target was removed) — render it
+    manually with `quarto::quarto_render("TCAC 2.0 Corpus Report.qmd")`
+    when needed. Its upstream targets (`count_st`, `yearly_counts`,
+    `corpus_tcac20`, `key_works`, etc.) are untouched and may still
+    feed other things.
 
 ### Key external packages
 
@@ -91,20 +127,26 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
 - `input/search terms/nature_TCAC_2.0.txt` — nature search term.
 - `input/openalex_types.csv` — OpenAlex work types, with `Included`
   column controlling the type filter.
-- `input/key papers/key_papers_TCAC_1.0.rds` — curated keypaper set
-  (DOI list inherited from TCAC 1.0).
-- `input/TCAC_1.0/ids.parquet` — TCAC 1.0 OpenAlex IDs, for the
-  TCAC 1.0 corpus extraction used in the comparison.
+- `input/key papers/key_papers.csv` — **fork:** curated keypaper set —
+  a mix of academic papers and non-paper "concept" entries (case
+  studies, artistic projects, other examples), columns
+  title/abstract/link/type. `prepare_key_works()` converts this
+  directly into the standardized `id/title/abstract/link/type`
+  parquet (`key_works` target) that feeds `emb_keypapers_*` — no
+  OpenAlex DOI lookup in this path anymore (superseded
+  `get_key_works()` / `key_papers_TCAC_1.0.rds`, which only worked for
+  entries with a resolvable DOI).
+- `input/corpus/` — **fork:** frozen clone of the upstream TCAC 2.0
+  corpus (read-only; consumed as a static input, not in git).
+- `input/embeddings/config=…/source={corpus,keypaper}/variant=…/` —
+  **fork:** `source=corpus` is a frozen clone (read-only, static input);
+  `source=keypaper` is writable and regenerated by `emb_keypapers_*`.
+  Not in git.
 - `input/snapshot/` — local OpenAlex snapshot (large; not in git).
 
 ### Outputs (`output/`)
 
-- `output/TCAC_2.0/corpus/` — full TCAC 2.0 records extracted from
-  the snapshot.
-- `output/TCAC_1.0/corpus/` — same for TCAC 1.0.
 - `output/keyworks/` — keypaper metadata (parquet/json/jsonl).
-- `output/TCAC_2.0/embeddings/` — hive-partitioned by
-  config / source / variant.
 - `output/TCAC_2.0/scores/` — pairwise-cosine parquets per variant.
 - `output/TCAC_2.0/topics/` — BERTopic outputs hive-partitioned
   config / bertopic-name / variant.

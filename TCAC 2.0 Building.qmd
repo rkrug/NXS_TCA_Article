@@ -110,8 +110,8 @@ For consistency, both corpora are extracted, using the OpenAlex ids, from the Op
 
 The number of works on OpenAlex is determined using the following search terms
 
-- Transformative change search term [tfc.txt](input/search terms/tfc_TCAC_1.0.txt){target="_blank"}
-- Nature search term [nature.txt](input/search terms/nature_TCAC_1.0.txt){target="_blank"}
+- Transformative change search term [tfc.txt](input/search terms/tfc_TCAC_2.0.txt){target="_blank"}
+- Nature search term [nature.txt](input/search terms/nature_TCAC_2.0.txt){target="_blank"}
 
 combined with `AND`as well as
 

@@ -101,6 +101,18 @@ embed_works <- function(
       ))
     }
 
+    # Fork safety guard: frozen (read-only) leaves — the reused TCAC 2.0
+    # corpus embeddings — must never be wiped. A writable leaf (e.g.
+    # source=keypaper, regenerated on a keypaper-set change) passes through.
+    if (file.access(leaf_dir, mode = 2L) != 0L) {
+      stop(sprintf(
+        "[%s|%s] leaf is read-only (frozen in this fork) but flagged partial (actual=%s vs marker=%s). Refusing to wipe %s. If regeneration is truly intended, `chmod -R u+w` the leaf first.",
+        source, variant_name,
+        format(n_have, big.mark = ","),
+        format(n_expected, big.mark = ","), leaf_dir
+      ), call. = FALSE)
+    }
+
     message(sprintf(
       "[%s|%s] leaf partial: actual=%s vs marker=%s — wiping and re-embedding.",
       source, variant_name,

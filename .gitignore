@@ -116,7 +116,17 @@ TCAC 2.0.code-workspace
 # The `output` symlink itself is local-machine state, never committed.
 output
 output_local/
-
-# input
-input/tcac_1.0_ids.parquet
 output/
+
+# Fork: frozen corpus + embeddings live under input/ (bulk clones of the
+# upstream TCAC 2.0 artefacts). Never commit them.
+input/corpus/
+input/embeddings/
+
+# RunPod pod-pool scripts: local pod configs (may reference secrets/hosts)
+# and generated pod inventories. Templates (pods.conf.example,
+# pods.conf.embedding, pods.conf.bertopic) stay tracked.
+scripts/runpod/pods.conf
+scripts/runpod/pods.conf.NLI
+scripts/runpod/hosts.generated.csv
+scripts/runpod/hosts.generated.yaml

@@ -17,8 +17,15 @@
 #   ./scripts/sync_embeddings_to_r2.sh --dry-run     # preview only
 set -euo pipefail
 
-LOCAL_ROOT="output/TCAC_2.0/embeddings/config=SPECTER2_runpod"
-REMOTE_ROOT="r2:tcac-2-0/embeddings/config=SPECTER2_runpod"
+# Fork: embeddings live under input/ (corpus = frozen clone; keypaper = live).
+# Bucket is a dedicated full copy of upstream's tcac-2-0 (embeddings +
+# intermediate/ BERTopic stage cache), so no shared-prefix collision risk.
+# Corpus embeddings already exist on the new bucket from the migration — a
+# full sync from here would re-upload them (clone mtimes differ). If you
+# only need to push the regenerated keypaper set, point LOCAL_ROOT/
+# REMOTE_ROOT at .../source=keypaper.
+LOCAL_ROOT="input/embeddings/config=SPECTER2_runpod"
+REMOTE_ROOT="r2:reimagine-tfc/embeddings/config=SPECTER2_runpod"
 
 if [[ ! -d "${LOCAL_ROOT}" ]]; then
 	echo "Local embedding root not found: ${LOCAL_ROOT}" >&2
