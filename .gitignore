@@ -119,3 +119,4 @@ output_local/
 
 # input
 input/tcac_1.0_ids.parquet
+output/

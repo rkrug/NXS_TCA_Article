@@ -2,65 +2,60 @@
 
 Living checklist of what's next. Updated as items land.
 
-Last updated: 2026-06-29.
+Last updated: 2026-06-30.
 
-## 🚨 URGENT — first Path B BERTopic fit collapsed
+## Diagnosis — BERTopic topic collapse (resolved)
 
-The completed v0.1.13 full-corpus run produced **only 6 topics**, with
-topic 3 absorbing 99% of the corpus:
+All four runs (`default_runpod`, `runpod_v2`, `runpod_v3`,
+`runpod_v4`) converge on the same finding: the SPECTER2-embedded
+corpus for `(transformative change) AND (nature)` is **semantically
+too tight for unsupervised topic modelling to find internal
+structure**.
+
+Root cause confirmed by pairwise cosine diagnostics: all corpus pairs
+have similarity 0.66–0.98 (median 0.80). UMAP collapses this tight
+cone to one blob regardless of params or preprocessing.
+
+`runpod_v4` (PCA 100 components + whitening + euclidean UMAP) result:
 
 ```
-topic 3: 4,564,627 primary + 1,161,334 fallback + 105 keypapers
-         = 5,726,066 of 5,768,257 works (~99%)
-nrow(topic_info) = 6
+topics=10  noise=241,317  fallback=1,164,760  keypapers_projected=105
 ```
 
-Vocabulary for topic 3 is generic corpus-wide (water, species, climate,
-soil, economic, …) — diagnostic of a collapsed clustering, not a
-meaningful topic. Fallback inherits the dominant cluster, so the
-problem is in the **primary HDBSCAN fit**, not the fallback projection.
+Of the 10 topics: **1 real topic** (Topic 7, 5.5M works + 104
+keypapers — the entire genuine TCA+nature corpus) and **9 tiny junk
+clusters** (exam dumps, movie spam, license-plate papers, Russian-
+and Arabic-language papers, etc.). PCA+whitening successfully
+separated the junk; it did not break the real corpus into sub-topics.
 
-Likely root cause: UMAP+HDBSCAN params from `default_runpod` don't hold
-up at 5.77 M scale. `hdbscan_min_cluster_size: 500` plus the current
-UMAP settings probably collapsed the embedding into one dominant blob.
-
-Next diagnostic step before retuning:
-
-1. Inspect the UMAP 2D projection (`viz_umap_fig` / `viz_umap_*`) — does
-   it show structure or one blob? That tells us whether UMAP or
-   HDBSCAN is the culprit.
-2. If UMAP looks fine → bump `hdbscan_min_cluster_size` down (200?
-   100?) and/or `min_samples` down.
-3. If UMAP collapsed → retune `umap_n_neighbors` (try 50-100) and
-   `umap_min_dist` (try 0.1).
-
-Retune does NOT require image rebuild — just a new bertopic config
-entry under `bertopic.configs:` and a dispatch. v0.1.13 stage caching
-won't help here (cfg-hash changes invalidate UMAP+HDBSCAN+c-TF-IDF
-caches), so retune cost ≈ full pod run (~50 min).
+**Conclusion:** BERTopic is not the right tool for finding internal
+structure in this corpus. The path forward is a **key
+definitions/statements reference set** — embed concept definitions
+as title+abstract pairs and use cosine similarity scoring (already
+built) to find which corpus papers deal with each concept. This
+reuses the existing `score_keypapers()` infrastructure with a new
+reference input.
 
 ## Short-term — finish current Phase 1 cycle
 
-- [ ] **Retune the BERTopic fit** per the URGENT section above.
+- [x] **Retune the BERTopic fit** — done through runpod_v2/v3/v4.
+  Diagnosis complete (see above). No further BERTopic tuning planned
+  until the key-definitions approach is in place.
 
-- [ ] **Find clustering parameters that yield useful topics as a
-  base for other keypaper sets**. The retune above only gets us out
-  of the collapse; the production target is parameter values that
-  produce well-separated, interpretable topics so that *switching the
-  keypaper set later* (per
-  [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md)) reuses the
-  same UMAP+HDBSCAN fit and just re-projects the new keypapers. That
-  means once we land on a good parameterisation we should:
-  - Lock the bertopic config under a stable name (e.g.
-    `prod_runpod_v1`) in `input/config.yaml`.
-  - Capture the cfg-hash for the cached UMAP / HDBSCAN / c-TF-IDF
-    stages on R2 — those become the shared base across keypaper sets.
-  - Document the chosen parameter values + rationale in
-    [TD_BERTopic_Parameters.md](TD_BERTopic_Parameters.md).
-  Useful means roughly 200–500 well-separated topics, the topic-size
-  histogram (`fig_topic_sizes`, to be wired) is reasonably flat in
-  log-y, and the per-topic c-TF-IDF vocabulary reads as topical not
-  generic.
+- [ ] **Implement key definitions as a reference set**. Concept
+  definitions structured as `(id, title, abstract)` — title = concept
+  name, abstract = definition + clarification — embedded via the same
+  TEI/SPECTER2 server and scored against the full corpus using
+  `score_keypapers()`. These are external documents (not in the
+  corpus). Steps:
+  - Store definitions in `input/key definitions/` as a structured
+    table (`.csv` or `.rds`).
+  - Add embed + score targets in `_targets.R` parallel to the
+    existing keypaper targets.
+  - `keypapers_in_corpus` is irrelevant for external definitions;
+    skip or suppress for this set.
+  - See [TODO_NamedKeypaperSets.md](TODO_NamedKeypaperSets.md) for
+    the multi-set architecture.
 
 - [ ] **Finalise visualisations** for the reports.
   - [ ] Wire `viz_umap_density` / `viz_umap_hulls` /
@@ -156,6 +151,18 @@ caches), so retune cost ≈ full pod run (~50 min).
 
 ## Done — most recent first
 
+- [x] **runpod_v4 full-corpus run completed** (`topics=10`,
+  `noise=241,317`, `fallback=1,164,760`, `keypapers_projected=105`).
+  PCA+whitening (v0.1.14 image) separates junk clusters from the real
+  corpus; real corpus remains one semantic blob. Diagnosis: corpus too
+  tight for internal topic structure — key definitions approach is next.
+- [x] **v0.1.14 image built + pushed**. PCA+whitening preprocessing
+  (`pca_n_components`, `pca_whiten`, `pca_sample_size`) + mean-centring
+  from runpod_v3. Provenance columns (`embedding_config`,
+  `bertopic_config`, `variant`) added to all output parquets.
+- [x] **pod_watch.sh / pod_log_tail.sh fixed** — hardcoded
+  `default_runpod` → `active_runpod`; root path check fixed; renv
+  stdout pollution filtered via `| grep '^SSH_'`.
 - [x] **Corpus Report — folded comparison into Results**. Removed the
   standalone "Comparison with TCAC 1.0" section; works-per-type and
   keypaper-presence tables now appear once each under

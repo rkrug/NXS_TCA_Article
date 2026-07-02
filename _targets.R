@@ -142,7 +142,7 @@ list(
     compare_corpora(
       corpus_tcac10_path = corpus_tcac10,
       corpus_tcac20_path = corpus_tcac20,
-      key_works_path     = key_works
+      key_works_path = key_works
     ),
     format = qs2_format()
   ),
@@ -632,7 +632,7 @@ list(
   ),
   tar_target(
     viz_umap_workmax,
-    viz_umap_work_max(viz_scores_long),
+    viz_umap_work_max(viz_scores_long, viz_umap_join),
     format = qs2_format()
   ),
   tar_target(
@@ -686,6 +686,16 @@ list(
   tarchetypes::tar_quarto(
     report_corpus,
     path = "TCAC 2.0 Corpus Report.qmd",
+    quiet = TRUE
+  ),
+
+  # Render the Topic Modelling Report. Re-builds whenever any of its tar_read()
+  # targets (search terms, count_st, yearly_counts, corpus_tcac20,
+  # key_works, keypapers_in_corpus, assess_*_in_tca) or the .qmd itself
+  # changes.
+  tarchetypes::tar_quarto(
+    report_topic_modelling,
+    path = "TCAC 2.0 Topic Modelling Report.qmd",
     quiet = TRUE
   ),
 

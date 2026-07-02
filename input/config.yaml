@@ -84,8 +84,8 @@ r2:
 # under `configs:` and pointing one of the `active_*` keys at the new name.
 bertopic:
   active_local:   ~                    # which entry drives topics_tcac20_local, ~ for disabled
-  active_runpod:  default_runpod       # which entry drives topics_tcac20_runpod
-  active_for_viz: default_runpod       # which run feeds viz_topics_* in the report
+  active_runpod:  runpod_v4            # which entry drives topics_tcac20_runpod
+  active_for_viz: runpod_v4            # which run feeds viz_topics_* in the report
 
   configs:
     default_local:
@@ -131,6 +131,113 @@ bertopic:
       primary_variant:    title_abstract
       fallback_variant:   title
       vectorizer_min_df:        2            # per-topic concat doc, not per-corpus doc
+      vectorizer_max_df:        0.95
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+    # Retune round 1 — drop HDBSCAN min_cluster_size + min_samples to break
+    # the default_runpod collapse (6 topics, topic 3 absorbed ~99% of the
+    # corpus). UMAP params identical to default_runpod, so the UMAP stage
+    # cache on R2 hits-and-skips; only HDBSCAN + c-TF-IDF + fallback re-run.
+    # Expected outcome: ~200–500 topics, several relevant.
+    runpod_v2:
+      method: runpod
+      # SSH transport — same pod as default_runpod; update on dispatch.
+      ssh_host:        64.247.206.80
+      ssh_port:        32312
+      ssh_user:        root
+      ssh_key_path:    ~/.ssh/id_ed25519
+      remote_workdir:  /work
+      # UMAP — identical to default_runpod so the R2 UMAP stage cache hits.
+      umap_n_components: 5
+      umap_n_neighbors:  30
+      umap_min_dist:     0.0
+      umap_metric:       cosine
+      # HDBSCAN — bumped down. 500/50 collapsed; try 100/10 → expect
+      # ~200–500 topics. Iterate further if still off.
+      hdbscan_min_cluster_size: 100
+      hdbscan_min_samples:       10
+      top_n_words:         15
+      keypaper_threshold:   3
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        2
+      vectorizer_max_df:        0.95
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+    # Retune round 2 — add corpus mean-centring before UMAP. Both
+    # default_runpod and runpod_v2 collapsed to ~6–7 topics because all
+    # pairwise cosine similarities in the corpus sit between 0.66–0.98
+    # (median 0.80): SPECTER2 embeddings for a semantically tight filtered
+    # corpus cluster in a narrow cone. Subtracting the corpus mean shifts
+    # the points from that cone to a ball centred on the origin, giving
+    # UMAP a real k-NN distance structure to work with.
+    # UMAP params unchanged from runpod_v2 but center_embeddings=true
+    # produces a new umap_hash → fresh R2 UMAP cache slot, no collision.
+    # HDBSCAN left at 100/10 from runpod_v2; revisit if the centred UMAP
+    # still collapses.
+    runpod_v3:
+      method: runpod
+      # SSH transport — update ssh_host/ssh_port on each new pod dispatch.
+      ssh_host:        154.54.102.45
+      ssh_port:        13820
+      ssh_user:        root
+      ssh_key_path:    ~/.ssh/id_ed25519
+      remote_workdir:  /work
+      center_embeddings: true          # subtract corpus mean before UMAP fit
+      umap_n_components: 5
+      umap_n_neighbors:  30
+      umap_min_dist:     0.0
+      umap_metric:       cosine
+      hdbscan_min_cluster_size: 100
+      hdbscan_min_samples:       10
+      top_n_words:         15
+      keypaper_threshold:   3
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        2
+      vectorizer_max_df:        0.95
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+    # Retune round 3 — PCA + whitening before UMAP.
+    # Diagnosis: the corpus sits in a tight cosine cone (pairwise similarity
+    # 0.66–0.98) but PCA shows genuine multi-dimensional structure: PC1
+    # explains only 8% of variance (corpus sample) / 10.8% (keypapers),
+    # and 100 PCs capture ~86% / 99.8% respectively. Mean-centring alone
+    # (runpod_v3) was insufficient; PCA + whitening decorrelates the
+    # dimensions AND rescales them to equal variance, giving UMAP a truly
+    # isotropic input space.
+    # Metric switches to euclidean (appropriate for whitened PCA output).
+    # n_neighbors lowered to 15 (PCA space is cleaner; 30 is for raw embeddings).
+    runpod_v4:
+      method: runpod
+      # SSH transport — update ssh_host/ssh_port on each new pod dispatch.
+      ssh_host:        64.247.201.10
+      ssh_port:        14584
+      ssh_user:        root
+      ssh_key_path:    ~/.ssh/id_ed25519
+      remote_workdir:  /work
+      # PCA preprocessing
+      pca_n_components:  100           # keeps ~86% corpus variance / ~99.8% keypaper variance
+      pca_whiten:        true          # rescale PCs to unit variance (isotropic input for UMAP)
+      pca_sample_size:   500000        # rows to fit PCA on; transforms full corpus after
+      # UMAP on PCA-whitened space
+      umap_n_components: 5
+      umap_n_neighbors:  15            # lower than v3: PCA space has real local structure
+      umap_min_dist:     0.0
+      umap_metric:       euclidean     # euclidean on whitened PCA (cosine less meaningful here)
+      hdbscan_min_cluster_size: 100
+      hdbscan_min_samples:       10
+      top_n_words:         15
+      keypaper_threshold:   3
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        2
       vectorizer_max_df:        0.95
       vectorizer_max_features:  20000
       vectorizer_ngram:        [1, 2]

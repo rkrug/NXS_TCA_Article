@@ -22,8 +22,8 @@
 #   ./scripts/pod_log_tail.sh python    # tail python.log (GPU script output)
 set -euo pipefail
 
-if [[ ! -f config.yaml ]]; then
-    echo "Run from the repo root (config.yaml not found here)." >&2
+if [[ ! -f input/config.yaml ]]; then
+    echo "Run from the repo root (input/config.yaml not found here)." >&2
     exit 1
 fi
 
@@ -31,11 +31,12 @@ fi
 # source of truth and survives ssh_host/port churn between pod
 # redeployments.
 eval "$(Rscript -e '
-cfg <- yaml::read_yaml("config.yaml")$bertopic$configs$default_runpod
+y   <- yaml::read_yaml("input/config.yaml")
+cfg <- y$bertopic$configs[[ y$bertopic$active_runpod ]]
 cat(sprintf("SSH_HOST=%s\nSSH_PORT=%s\nSSH_USER=%s\nSSH_KEY=%s\n",
             shQuote(cfg$ssh_host), shQuote(cfg$ssh_port),
             shQuote(cfg$ssh_user), shQuote(path.expand(cfg$ssh_key_path))))
-')"
+' | grep '^SSH_')"
 
 WHICH="${1:-current}"
 case "${WHICH}" in

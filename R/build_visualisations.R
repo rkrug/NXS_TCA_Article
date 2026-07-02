@@ -431,8 +431,8 @@ build_viz_threshold_fig <- function(
     ggplot2::aes(threshold, n_above, colour = variant)
   ) +
     ggplot2::geom_line(linewidth = 1) +
-    ggplot2::scale_x_continuous(limits = c(x_zoom_min, 1)) +
     ggplot2::scale_y_log10() +
+    ggplot2::coord_cartesian(xlim = c(x_zoom_min, 1)) +
     ggplot2::scale_colour_manual(
       values = c("#E41A1C", "#377EB8", "#4DAF4A")
     ) +
@@ -1470,11 +1470,16 @@ viz_umap_best_kp <- function(
   scores_tcac20_title_abstract,
   variant = "title_abstract"
 ) {
-  scores <- arrow::open_dataset(
+  # Restrict to the visible (sampled) corpus ids before collecting — the
+  # full 5.77M × 105 score frame is ~1 GB in memory; the sample is ~1K
+  # rows. Result row count = nrow(umap_data$emb_corpus).
+  visible_ids <- umap_data$emb_corpus$id
+  variant_filter <- variant
+  scores_v <- arrow::open_dataset(
     file.path(scores_tcac20_title_abstract, "..", "..")
   ) |>
+    dplyr::filter(variant == variant_filter, id %in% visible_ids) |>
     dplyr::collect()
-  scores_v <- scores |> dplyr::filter(variant == !!variant)
   ref_cols <- grep("^https://", names(scores_v), value = TRUE)
   mtx <- as.matrix(scores_v[, ref_cols])
   best_idx <- max.col(mtx, ties.method = "first")
@@ -1508,8 +1513,15 @@ viz_umap_keypaper <- function(umap_data, best_kp_df) {
     )
 }
 
-viz_umap_work_max <- function(scores_long) {
+viz_umap_work_max <- function(scores_long, umap_data) {
+  # Restrict to visible (sampled) corpus + keypaper ids before scanning
+  # scores_long (17M rows). Result row count = length(visible_ids).
+  visible_ids <- unique(c(
+    umap_data$emb_corpus$id,
+    umap_data$emb_keypaper_base$id
+  ))
   scores_long |>
+    dplyr::filter(id %in% visible_ids) |>
     dplyr::summarise(work_max_sim = max(score, na.rm = TRUE), .by = id) |>
     dplyr::arrange(id)
 }
@@ -1546,13 +1558,22 @@ build_viz_umap_fig <- function(
     group = "tcac20_works"
   )
 
+  # Restrict the JS lookup payloads to the rows actually rendered.
+  # best_kp_df / work_max are corpus-wide (~50 MB each as JSON); the JS
+  # click handlers only need entries for points the user can click, which
+  # is the sampled corpus subset in emb_corpus plus the keypapers.
+  visible_ids <- unique(c(emb_corpus$id, emb_keypaper$id))
+  best_kp_df_vis <- best_kp_df |>
+    dplyr::filter(corpus_id %in% visible_ids | kp_id %in% visible_ids)
+  work_max_vis <- work_max |> dplyr::filter(id %in% visible_ids)
+
   best_kp_json <- jsonlite::toJSON(
-    best_kp_df,
+    best_kp_df_vis,
     dataframe = "rows",
     auto_unbox = TRUE
   )
   work_max_json <- jsonlite::toJSON(
-    work_max,
+    work_max_vis,
     dataframe = "rows",
     auto_unbox = TRUE
   )

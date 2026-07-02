@@ -333,7 +333,8 @@ def _meta_to_r2(client, bucket: str, key: str, cfg: dict, stage: str) -> None:
 
 _UMAP_FIELDS = (
     "primary_variant", "umap_n_components", "umap_n_neighbors",
-    "umap_min_dist", "umap_metric", "random_seed",
+    "umap_min_dist", "umap_metric", "random_seed", "center_embeddings",
+    "pca_n_components", "pca_whiten", "pca_sample_size",
 )
 
 _HDBSCAN_FIELDS = _UMAP_FIELDS + (
@@ -365,6 +366,20 @@ def _cfg_hash(d: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Preprocessing helper — applied consistently to corpus, keypapers, fallback
+# ---------------------------------------------------------------------------
+
+def _apply_preprocessing(X: np.ndarray, mean_vec, pca_model) -> np.ndarray:
+    """Apply PCA (+ optional whitening, baked into the model) or plain
+    mean-centring to an embedding matrix X. Returns float32 array."""
+    if pca_model is not None:
+        return np.asarray(pca_model.transform(X), dtype=np.float32)
+    if mean_vec is not None:
+        return (X - mean_vec).astype(np.float32)
+    return X
+
+
+# ---------------------------------------------------------------------------
 # Stage 1: UMAP fit (corpus only, keypapers decoupled)
 # ---------------------------------------------------------------------------
 
@@ -373,68 +388,131 @@ def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
     bucket = r2_cfg["bucket"]
     prefix = f"intermediate/config={config_name}/umap_cfg={umap_hash}"
     keys = {
-        "model":  f"{prefix}/umap_model.pkl",
-        "coords": f"{prefix}/umap_coords.parquet",
-        "meta":   f"{prefix}/meta.json",
+        "model":     f"{prefix}/umap_model.pkl",
+        "coords":    f"{prefix}/umap_coords.parquet",
+        "meta":      f"{prefix}/meta.json",
+        "mean_vec":  f"{prefix}/mean_vec.pkl",   # written when center_embeddings=true (v3)
+        "pca_model": f"{prefix}/pca_model.pkl",  # written when pca_n_components set (v4+)
     }
-    client = _r2_client(r2_cfg)
+    client  = _r2_client(r2_cfg)
+    center  = bool(cl.get("center_embeddings", False))
+    pca_n   = int(cl.get("pca_n_components") or 0)
 
     if _r2_exists(client, bucket, keys["model"]) and _r2_exists(client, bucket, keys["coords"]):
         print(f"[cache hit] UMAP: s3://{bucket}/{prefix}")
-        umap_model = _unpickle_from_r2(client, bucket, keys["model"])
+        umap_model  = _unpickle_from_r2(client, bucket, keys["model"])
         umap_coords = _parquet_from_r2(client, bucket, keys["coords"])
-        return umap_model, umap_coords
+        pca_model = (
+            _unpickle_from_r2(client, bucket, keys["pca_model"])
+            if pca_n and _r2_exists(client, bucket, keys["pca_model"])
+            else None
+        )
+        mean_vec = (
+            _unpickle_from_r2(client, bucket, keys["mean_vec"])
+            if (not pca_n) and center and _r2_exists(client, bucket, keys["mean_vec"])
+            else None
+        )
+        return umap_model, umap_coords, mean_vec, pca_model
 
     print(f"[cache miss] UMAP: s3://{bucket}/{prefix}")
     print("[step] reading corpus primary variant (embeddings only, no text) for UMAP fit")
     df_corpus = _read_embeddings_only(corpus_root, cl["primary_variant"], r2_cfg)
-    n_corpus = len(df_corpus)
+    n_corpus  = len(df_corpus)
     print(f"        loaded {n_corpus:,} corpus rows")
     _heartbeat()
 
-    # Extract everything we need from df_corpus, then DROP IT before
-    # cuml.UMAP.fit_transform runs. df_corpus holds title + abstract text
-    # for the whole corpus (~50-70 GB at 4.6M rows); keeping it alive
-    # through fit_transform causes OOM on pods with <120 GB host RAM.
-    # We don't need text again until the c-TF-IDF stage, which re-reads
-    # it from R2 via duckdb. ids + X are all we need for UMAP + downstream.
     ids = df_corpus["id"].astype(str).values
-    X = _matrix_from_df(df_corpus)
+    X   = _matrix_from_df(df_corpus)
     del df_corpus
     gc.collect()
     _heartbeat()
 
-    print(f"[step] cuml.UMAP fit_transform on {n_corpus:,} corpus rows")
+    # ---- Preprocessing: PCA (v4+) or mean-centring (v3) ------------------
+    pca_model = None
+    mean_vec  = None
+
+    if pca_n:
+        # PCA + optional whitening. Fit on a random sample to bound GPU
+        # memory; transform is a linear projection so the sample
+        # approximation is accurate for the full corpus.
+        # cuml.PCA(whiten=True) applies both centring and whitening, so
+        # all n_components contribute equally to UMAP distances —
+        # preventing the first PC from dominating the k-NN graph.
+        whiten   = bool(cl.get("pca_whiten", True))
+        samp_n   = int(cl.get("pca_sample_size") or 500_000)
+        seed     = int(cl.get("random_seed", 13))
+        samp_n   = min(samp_n, n_corpus)
+
+        print(f"[step] cuml.PCA fit on {samp_n:,} sample rows "
+              f"(n_components={pca_n}, whiten={whiten})")
+        from cuml.decomposition import PCA as cumlPCA
+        pca_model = cumlPCA(
+            n_components=pca_n,
+            whiten=whiten,
+            random_state=seed,
+        )
+        rng        = np.random.default_rng(seed)
+        sample_idx = rng.choice(n_corpus, samp_n, replace=False)
+        t0 = time.time()
+        pca_model.fit(X[sample_idx])
+        print(f"[time] PCA fit: {time.time() - t0:.1f}s  "
+              f"variance explained: "
+              f"{float(np.asarray(pca_model.explained_variance_ratio_).sum()):.1%}")
+        _heartbeat()
+
+        print(f"[step] PCA transform on {n_corpus:,} corpus rows")
+        t0 = time.time()
+        X  = np.asarray(pca_model.transform(X), dtype=np.float32)
+        print(f"[time] PCA transform: {time.time() - t0:.1f}s  "
+              f"shape {X.shape}")
+        gc.collect()
+        _heartbeat()
+
+    elif center:
+        # Plain mean-centring (v3 fallback when PCA is not configured).
+        mean_vec = X.mean(axis=0)
+        X        = (X - mean_vec).astype(np.float32)
+        print(f"[step] mean-centred embeddings "
+              f"(|mean| = {float(np.linalg.norm(mean_vec)):.4f})")
+        _heartbeat()
+
+    # ---- UMAP fit --------------------------------------------------------
+    print(f"[step] cuml.UMAP fit_transform on {n_corpus:,} rows "
+          f"(input dim={X.shape[1]})")
     from cuml.manifold import UMAP as cumlUMAP
     umap_model = cumlUMAP(
         n_components=int(cl.get("umap_n_components", 5)),
-        n_neighbors=int(cl.get("umap_n_neighbors",  30)),
+        n_neighbors=int(cl.get("umap_n_neighbors",  15)),
         min_dist=float(cl.get("umap_min_dist",       0.0)),
-        metric=cl.get("umap_metric", "cosine"),
+        metric=cl.get("umap_metric", "euclidean"),
         random_state=int(cl.get("random_seed", 13)),
     )
-    t0 = time.time()
+    t0       = time.time()
     umap_arr = umap_model.fit_transform(X)
     print(f"[time] UMAP fit_transform: {time.time() - t0:.1f}s")
     _heartbeat()
 
-    n_comp = umap_arr.shape[1]
+    n_comp     = umap_arr.shape[1]
     coord_cols = [f"V{i+1}" for i in range(n_comp)]
     umap_coords = pd.DataFrame(np.asarray(umap_arr, dtype=np.float32), columns=coord_cols)
     umap_coords.insert(0, "id", ids)
 
-    # Free large host-side arrays before pickle (cuml model keeps its own GPU copy).
     del X, umap_arr
     gc.collect()
     _heartbeat()
 
+    # ---- Cache write -----------------------------------------------------
     print(f"[cache write] UMAP model + coords to s3://{bucket}/{prefix}")
-    _pickle_to_r2(client, bucket, keys["model"], umap_model)
+    _pickle_to_r2(client, bucket, keys["model"],  umap_model)
     _parquet_to_r2(client, bucket, keys["coords"], umap_coords)
     _meta_to_r2(client, bucket, keys["meta"], _cfg_subset(cl, _UMAP_FIELDS), "umap")
+    if pca_model is not None:
+        _pickle_to_r2(client, bucket, keys["pca_model"], pca_model)
+    if mean_vec is not None:
+        _pickle_to_r2(client, bucket, keys["mean_vec"], mean_vec)
     _heartbeat()
 
-    return umap_model, umap_coords
+    return umap_model, umap_coords, mean_vec, pca_model
 
 
 # ---------------------------------------------------------------------------
@@ -630,13 +708,13 @@ def stage_ctfidf(corpus_root: str, topics_corpus: pd.DataFrame,
 # ---------------------------------------------------------------------------
 
 def stage_project_keypapers(refer_root: str, umap_model, hdbscan_model,
-                            r2_cfg: dict, cl: dict) -> pd.DataFrame:
+                            r2_cfg: dict, cl: dict,
+                            mean_vec=None, pca_model=None) -> pd.DataFrame:
     print("[step] projecting keypapers into fitted UMAP + HDBSCAN")
-    # Keypaper projection only needs id + embeddings, no text.
     df_kp = _read_embeddings_only(refer_root, cl["primary_variant"], r2_cfg)
     print(f"        loaded {len(df_kp):,} keypapers")
-    X_kp = _matrix_from_df(df_kp)
-
+    X_kp    = _matrix_from_df(df_kp)
+    X_kp    = _apply_preprocessing(X_kp, mean_vec, pca_model)
     umap_kp = umap_model.transform(X_kp)
     from cuml.cluster.hdbscan import approximate_predict
     labels_kp, probs_kp = approximate_predict(hdbscan_model, umap_kp)
@@ -657,7 +735,8 @@ def stage_project_keypapers(refer_root: str, umap_model, hdbscan_model,
 def stage_project_fallback(corpus_root: str, umap_model, hdbscan_model,
                            r2_cfg: dict, config_name: str, cl: dict,
                            umap_hash: str, hdbscan_hash: str,
-                           fallback_hash: str) -> pd.DataFrame:
+                           fallback_hash: str,
+                           mean_vec=None, pca_model=None) -> pd.DataFrame:
     fallback = cl.get("fallback_variant")
     empty_cols = ["id", "source", "topic_id", "topic_source", "probability"]
     if not fallback:
@@ -685,7 +764,8 @@ def stage_project_fallback(corpus_root: str, umap_model, hdbscan_model,
     for chunk in _stream_variant_minus_primary(
         corpus_root, fallback, cl["primary_variant"], r2_cfg, chunk_rows=50_000
     ):
-        X_chunk = _matrix_from_df(chunk)
+        X_chunk    = _matrix_from_df(chunk)
+        X_chunk    = _apply_preprocessing(X_chunk, mean_vec, pca_model)
         umap_chunk = umap_model.transform(X_chunk)
         labels, probs = approximate_predict(hdbscan_model, umap_chunk)
         fb_chunks.append(pd.DataFrame({
@@ -782,7 +862,9 @@ def main() -> int:
           f"ctfidf={ctfidf_hash}  fallback={fallback_hash}")
 
     # -------- Stage 1: UMAP fit (or load) --------------------------------
-    umap_model, umap_coords = stage_umap(corpus_root, r2_cfg, config_name, cl, umap_hash)
+    umap_model, umap_coords, mean_vec, pca_model = stage_umap(
+        corpus_root, r2_cfg, config_name, cl, umap_hash
+    )
     _heartbeat()
 
     # -------- Stage 2: HDBSCAN fit (or load) -----------------------------
@@ -791,7 +873,6 @@ def main() -> int:
     )
     _heartbeat()
 
-    # UMAP coords table no longer needed beyond this point.
     del umap_coords
     gc.collect()
 
@@ -803,14 +884,18 @@ def main() -> int:
     _heartbeat()
 
     # -------- Stage 4: project keypapers ---------------------------------
-    topics_kp = stage_project_keypapers(refer_root, umap_model, hdbscan_model, r2_cfg, cl)
+    topics_kp = stage_project_keypapers(
+        refer_root, umap_model, hdbscan_model, r2_cfg, cl,
+        mean_vec=mean_vec, pca_model=pca_model
+    )
     _heartbeat()
 
     # -------- Stage 5: project fallback variant --------------------------
     topics_fb = stage_project_fallback(
         corpus_root, umap_model, hdbscan_model,
         r2_cfg, config_name, cl,
-        umap_hash, hdbscan_hash, fallback_hash
+        umap_hash, hdbscan_hash, fallback_hash,
+        mean_vec=mean_vec, pca_model=pca_model
     )
     _heartbeat()
 
@@ -838,6 +923,15 @@ def main() -> int:
     info["is_relevant"] = info["n_keypapers"] >= kp_thresh
 
     out_dir = _leaf_dir(out_root, config_name, run_name, primary)
+
+    # Stamp provenance into every parquet so files are self-describing when
+    # read directly with read_parquet() — not just when accessed via
+    # open_dataset() hive partitioning.
+    for df in (out_topics, info, topic_words):
+        df["embedding_config"] = config_name
+        df["bertopic_config"]  = run_name
+        df["variant"]          = primary
+
     print(f"[step] writing parquets to {out_dir}")
     out_topics.to_parquet( out_dir / "topics.parquet",      index=False)
     info.to_parquet(       out_dir / "topic_info.parquet",  index=False)

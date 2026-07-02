@@ -7,7 +7,83 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
-## v0.1.13 — pending build
+## v0.1.14 — 2026-06-30 (built + pushed)
+
+Add optional PCA + whitening before UMAP fit (runpod_v4), plus corpus
+mean-centring from runpod_v3 (kept for backward compat).
+
+### PCA + whitening (new in v0.1.14)
+
+Diagnosis: mean-centring alone (runpod_v3) was insufficient. PCA on
+corpus sample shows PC1 explains only 8% of variance, and 100 PCs
+capture ~86% — genuine multi-dimensional structure exists but is hidden
+by the tight cosine cone. PCA + whitening decorrelates dimensions and
+rescales them to unit variance, giving UMAP an isotropic input space.
+
+`scripts/run_bertopic_gpu.py`:
+- `"pca_n_components"`, `"pca_whiten"`, `"pca_sample_size"` added to
+  `_UMAP_FIELDS` so enabling PCA produces a new `umap_hash` and fresh
+  R2 cache slot.
+- New `_apply_preprocessing(X, mean_vec, pca_model)` helper used
+  consistently across corpus fit, keypaper projection, and fallback
+  chunks.
+- `stage_umap`: when `pca_n_components` is set, fits `cuml.PCA`
+  (with `whiten=True`) on a random sample of `pca_sample_size` rows,
+  transforms the full corpus, then passes the reduced matrix to UMAP.
+  PCA model saved as `pca_model.pkl` in the same R2 prefix as the UMAP
+  model; loaded on cache hit.
+- `stage_project_keypapers` / `stage_project_fallback`: accept
+  `pca_model=None` kwarg, apply `_apply_preprocessing` before
+  `umap_model.transform`.
+- `main()`: unpacks 4-tuple `(umap_model, umap_coords, mean_vec,
+  pca_model)` from `stage_umap`, threads both through projection stages.
+- When `pca_n_components` is absent/null, PCA is skipped and
+  `center_embeddings` (v3 mean-centring) still applies — no change to
+  existing configs.
+
+No Dockerfile changes; `cuml.decomposition.PCA` is already in the
+RAPIDS base image.
+Enabled via `pca_n_components: 100` + `pca_whiten: true` in the
+`runpod_v4` config entry in `input/config.yaml`.
+
+### Mean-centring (carried over from planned v0.1.13 / v0.1.14 split)
+
+Add optional corpus mean-centring before UMAP fit.
+
+Diagnosis: both `default_runpod` (HDBSCAN 500/50) and `runpod_v2`
+(100/10) collapsed to 6–7 topics because all pairwise cosine
+similarities in the SPECTER2-embedded corpus sit in the range
+0.66–0.98 (corpus median 0.80, keypaper median 0.90). With embeddings
+packed into a narrow cone on the unit hypersphere, UMAP's k-NN graph
+is near-uniformly dense and UMAP collapses the manifold to one blob
+regardless of HDBSCAN params.
+
+Fix: subtract the corpus mean vector from every embedding before
+passing to UMAP. This shifts the distribution from a cone to a ball
+centred on the origin, restoring the local distance structure UMAP
+needs.
+
+`scripts/run_bertopic_gpu.py`:
+- `"center_embeddings"` added to `_UMAP_FIELDS` so enabling it
+  produces a new `umap_hash` and a fresh R2 cache slot — no collision
+  with existing collapsed runs.
+- `stage_umap`: when `center_embeddings: true`, compute
+  `mean_vec = X.mean(axis=0)`, subtract it from `X` before
+  `cuml.UMAP.fit_transform`, and write `mean_vec.pkl` to R2 alongside
+  the UMAP model. On cache hit, loads `mean_vec.pkl` if present.
+  Returns `(umap_model, umap_coords, mean_vec)` — `mean_vec` is
+  `None` when centering is off, preserving existing behaviour.
+- `stage_project_keypapers` and `stage_project_fallback`: accept
+  `mean_vec=None` kwarg and subtract it from each input matrix before
+  `umap_model.transform()`. Fallback chunks each get the same shift.
+- `main()`: unpacks the new three-tuple return from `stage_umap` and
+  threads `mean_vec` into both projection stages.
+
+No Dockerfile changes; pure Python script edit.
+Enabled via `center_embeddings: true` in the BERTopic config entry
+(`runpod_v3` in `input/config.yaml`).
+
+## v0.1.13 — folded into v0.1.14 (never individually built)
 
 Cache the fallback variant projection on R2.
 
@@ -42,7 +118,7 @@ swap touches nothing in the cache.
 
 No Dockerfile changes; pure Python script edit.
 
-## v0.1.12 — pending build
+## v0.1.12 — folded into v0.1.14 (never individually built)
 
 Memory fix in stage_ctfidf — push per-topic aggregation into duckdb.
 
@@ -72,7 +148,7 @@ scripts/run_bertopic_gpu.py stage_ctfidf:
 
 No Dockerfile changes; pure Python script refactor.
 
-## v0.1.11 — pending build
+## v0.1.11 — folded into v0.1.14 (never individually built)
 
 Skip corpus text columns in the UMAP read.
 
@@ -120,7 +196,7 @@ columns entirely in stage_umap's reader).
 
 No Dockerfile or entrypoint changes; pure Python script edit.
 
-## v0.1.9 — pending build
+## v0.1.9 — folded into v0.1.14 (never individually built)
 
 Two reliability fixes folded into one image rebuild.
 

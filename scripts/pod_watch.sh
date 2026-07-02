@@ -32,11 +32,12 @@ if [[ ! -f input/config.yaml ]]; then
 fi
 
 eval "$(Rscript -e '
-cfg <- yaml::read_yaml("input/config.yaml")$bertopic$configs$default_runpod
+y   <- yaml::read_yaml("input/config.yaml")
+cfg <- y$bertopic$configs[[ y$bertopic$active_runpod ]]
 cat(sprintf("SSH_HOST=%s\nSSH_PORT=%s\nSSH_USER=%s\nSSH_KEY=%s\n",
             shQuote(cfg$ssh_host), shQuote(cfg$ssh_port),
             shQuote(cfg$ssh_user), shQuote(path.expand(cfg$ssh_key_path))))
-')"
+' | grep '^SSH_')"
 
 INTERVAL="${1:-5}"
 
