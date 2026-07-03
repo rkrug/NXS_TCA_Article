@@ -204,7 +204,7 @@ Net cost per set after the first one is cached:
 | `_targets.R` | New `keypapers_cfg` target (reads keypapers.active). `emb_keypapers_*` targets gain `keypaper_set=` hive partition in their `out_dir`. `score_keypapers` outputs similarly partitioned. `topics_tcac20_runpod`'s out_dir extends to include keypaper_set partition. |
 | `R/embed_works.R` | No change — already accepts `out_dir`; targets just passes a per-set dir. |
 | `R/run_bertopic_runpod.R` | Output path: include `keypaper_set=` segment after the variant. Wrapper marker stored at the per-set leaf. |
-| `scripts/run_bertopic_gpu.py` | No change — script writes to `--output-dir` it's told; targets passes the per-set leaf. |
+| `scripts/runpod/run_bertopic_gpu.py` | No change — script writes to `--output-dir` it's told; targets passes the per-set leaf. |
 | `R/build_visualisations.R` (viz / fig targets) | Read from active_for_viz set's leaf paths. |
 | `TCAC 2.0 Vectorisation.qmd` / `TCAC 2.0 Building.qmd` | No change unless mentioning the active set in captions. |
 

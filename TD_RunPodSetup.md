@@ -9,7 +9,7 @@ The R-side support is already in place:
   from the active embedding config.
 - `config.yaml` ships with a commented `SPECTER2_runpod:` template under
   `embeddings:`.
-- `scripts/start_tei_runpod.sh` runs on the pod with A100/H100-scale defaults.
+- `scripts/runpod/start_tei_runpod.sh` runs on the pod with A100/H100-scale defaults.
 
 What's left is the pod-side setup. This doc is that checklist.
 
@@ -78,7 +78,7 @@ keeps the laptop out of the loop.
 
 **Container start command**: replace the template default with either
 
-- a copy of `scripts/start_tei_runpod.sh` baked into a custom image, or
+- a copy of `scripts/runpod/start_tei_runpod.sh` baked into a custom image, or
 - the equivalent inline:
 
   ```

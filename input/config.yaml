@@ -74,9 +74,13 @@ r2:
   region:                  auto
   embeddings_local_root:   input/embeddings
   embeddings_remote_prefix: embeddings
-  # Credentials never live here. Laptop uses rclone's config; the pod
-  # gets them as RunPod Secrets (template env vars):
-  #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+  # Credentials never live here.
+  #   - emb_keypapers_r2_synced (sync_keypaper_embeddings_to_r2()) reads them
+  #     fresh from the system keyring on every run: R2_ACCESS_KEY, R2_SECRET_KEY.
+  #   - scripts/runpod/sync_embeddings_to_r2.sh (manual full-sync utility)
+  #     instead uses rclone's own pre-configured `r2:` remote.
+  #   - The pod gets them as RunPod Secrets (template env vars):
+  #     R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.
 
 # NEW: dual-path BERTopic. Each named entry under `configs:` produces its
 # own (config, bertopic, variant) leaf under output/TCAC_2.0/topics/, so
@@ -217,8 +221,8 @@ bertopic:
     runpod_v4:
       method: runpod
       # SSH transport — update ssh_host/ssh_port on each new pod dispatch.
-      ssh_host:        64.247.201.10
-      ssh_port:        14584
+      ssh_host:        195.26.232.131
+      ssh_port:        50151
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work
@@ -235,6 +239,57 @@ bertopic:
       hdbscan_min_samples:       10
       top_n_words:         15
       keypaper_threshold:   3
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        2
+      vectorizer_max_df:        0.95
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+
+    # Supervised UMAP round 1 — concept-anchored clustering.
+    # Instead of relying on the corpus's own density structure (which
+    # collapsed to one blob in v2–v4: pairwise cosine 0.66–0.98), the
+    # UMAP fit is guided by 40 key concept definitions supplied as class
+    # labels. Each concept definition (title + abstract, embedded via
+    # SPECTER2) anchors one label; all ~4.6M corpus works are unlabelled
+    # (y = -1). UMAP's semi-supervised mode (target_metric=categorical,
+    # target_weight=0.5) pulls the manifold so concept-related works
+    # cluster near their concept's anchor rather than collapsing into a
+    # single cosine cone.
+    # Corpus embeddings reused from v4; UMAP/HDBSCAN/c-TF-IDF all rerun
+    # (new umap_hash due to supervised fit). target_weight is the main
+    # tuning knob: push toward 1.0 for tighter concept alignment, back
+    # toward 0.0 if the layout becomes too rigid.
+    runpod_v5_supervised:
+      method: runpod
+      ssh_host:        ~          # fill in after pod creation
+      ssh_port:        ~
+      ssh_user:        root
+      ssh_key_path:    ~/.ssh/id_ed25519
+      remote_workdir:  /work
+
+      # Supervised UMAP — key concept definitions provide class labels
+      supervised_umap:    true
+      target_metric:      categorical
+      target_weight:      1          # 0 = fully unsupervised, 1 = fully label-driven; tune
+      concept_labels_path: input/key definitions/key_definitions_v1.csv
+
+      # Raw cosine on SPECTER2 embeddings (no PCA — supervised signal
+      # provides the structure that PCA+whitening was trying to manufacture)
+      umap_n_components:  5
+      umap_n_neighbors:   15
+      umap_min_dist:      0.0
+      umap_metric:        cosine
+
+      # With 40 concept anchors expect ~40–80 meaningful clusters;
+      # raise min_cluster_size vs v4 since structure should be cleaner
+      hdbscan_min_cluster_size: 100
+      hdbscan_min_samples:       50
+
+      top_n_words:         15
+      keypaper_threshold:   1       # each concept keypaper should land in a topic
       primary_variant:    title_abstract
       fallback_variant:   title
       vectorizer_min_df:        2

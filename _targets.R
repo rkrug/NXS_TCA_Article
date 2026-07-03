@@ -296,6 +296,25 @@ list(
     )
   },
 
+  # The RunPod pod reads embeddings straight from R2 (no rsync upload) — see
+  # run_bertopic_runpod()'s "Translate local emb dirs -> s3:// URIs" step.
+  # Corpus embeddings are frozen/static and already mirrored to R2 once;
+  # keypaper embeddings change whenever the keypaper set changes and must be
+  # re-pushed, or the pod silently scores against a stale set. This target
+  # depends on all three emb_keypapers_* so it re-syncs whenever any of them
+  # change, and topics_tcac20_runpod takes it as a dep token below so the
+  # sync always happens before dispatch.
+  tar_target(
+    emb_keypapers_r2_synced,
+    sync_keypaper_embeddings_to_r2(
+      emb_keypapers_title,
+      emb_keypapers_abstract,
+      emb_keypapers_title_abstract,
+      r2_cfg = bertopic_runpod_cfg$r2
+    ),
+    format = "file"
+  ),
+
   # Path B — RunPod GPU full-fit via cuml. SSH/rsync orchestrated by the
   # R wrapper; needs a pod up from the docker/bertopic-runpod image.
   tar_target(
@@ -307,7 +326,8 @@ list(
       cfg = bertopic_runpod_cfg,
       run_name = yaml::read_yaml(config_file)$bertopic$active_runpod,
       fallback_corpus = emb_tcac20_title,
-      fallback_ref = emb_keypapers_title
+      fallback_ref = emb_keypapers_title,
+      keypaper_r2_synced = emb_keypapers_r2_synced
     ),
     format = "file"
   ),
@@ -382,6 +402,11 @@ list(
       key_works = key_works,
       corpus_tcac20 = corpus_tcac20
     ),
+    format = qs2_format()
+  ),
+  tar_target(
+    tbl_top_matches_per_kp,
+    build_tbl_top_matches_per_kp_widget(viz_top_matches_per_kp),
     format = qs2_format()
   ),
   tar_target(
@@ -594,11 +619,11 @@ list(
     format = qs2_format()
   ),
 
-  # Render the vectorisation report. Re-builds whenever any score parquet,
+  # Render the embeddings report. Re-builds whenever any score parquet,
   # the embeddings dataset, or the .qmd itself changes.
   tarchetypes::tar_quarto(
-    report_vectorisation,
-    path = "TCAC 2.0 Embedding Report.qmd",
+    report_embeddings,
+    path = "Reimaging TFC Embedding Report.qmd",
     quiet = TRUE
   ),
 
@@ -607,7 +632,7 @@ list(
   # key_works, assess_*_in_tca) or the .qmd itself changes.
   tarchetypes::tar_quarto(
     report_topic_modelling,
-    path = "TCAC 2.0 Topic Modelling Report.qmd",
+    path = "Reimaging TFC Topic Modelling Report.qmd",
     quiet = TRUE
   ),
 

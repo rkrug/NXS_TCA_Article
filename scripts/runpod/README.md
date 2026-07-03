@@ -104,6 +104,26 @@ When run against the generated inventory (the default — not `-i <pod-id>`),
 successfully actioned, since they'd otherwise reference pods that no longer
 exist or are stopped.
 
+## Watching the bertopic pod
+
+`pod_watch.sh` and `pod_log_tail.sh` connect over SSH using the connection
+details in `hosts.generated.yaml` (written by `create_pods.sh` — always
+reflects the most recently created pod, independent of whatever is currently
+pasted into `input/config.yaml`'s `bertopic.configs.<name>` block):
+
+```bash
+scripts/runpod/pod_watch.sh              # poll process CPU/mem + nvidia-smi every 5s
+scripts/runpod/pod_watch.sh 10           # ...every 10s instead
+
+scripts/runpod/pod_log_tail.sh           # tail /work/bertopic-current.log (boot/watchdog)
+scripts/runpod/pod_log_tail.sh python    # tail /work/python.log (GPU script progress — use this one)
+```
+
+Both tee their output to a timestamped file under `output/pod_logs/` so a
+session survives even if the pod is evicted or SSH drops. TEI-pod-specific
+NLI leftovers (`keep_alive.sh`, `watch_gpu.sh`) don't apply here — they poll
+HTTP endpoints the bertopic pod doesn't expose (SSH/TCP-22 only).
+
 ## Notes / things to verify against current RunPod docs
 
 RunPod's API has changed shape before (this project moved from the older

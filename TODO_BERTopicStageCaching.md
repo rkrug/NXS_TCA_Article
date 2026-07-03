@@ -1,7 +1,7 @@
 # TD — BERTopic Stage Caching
 
 > **Status update 2026-06-12**: implemented in image
-> `bertopic-runpod:v0.1.8` and [scripts/run_bertopic_gpu.py](scripts/run_bertopic_gpu.py).
+> `bertopic-runpod:v0.1.8` and [scripts/runpod/run_bertopic_gpu.py](scripts/runpod/run_bertopic_gpu.py).
 > The script now does direct cuml + sklearn orchestration with R2
 > cache at each stage boundary; BERTopic itself is bypassed entirely
 > (one of the side benefits is escaping BERTopic's Representation-step
@@ -100,7 +100,7 @@ parameter to re-tune after seeing first results.
 
 ### Python side: one CLI per stage
 
-Split `scripts/run_bertopic_gpu.py` into three sub-commands. Each
+Split `scripts/runpod/run_bertopic_gpu.py` into three sub-commands. Each
 reads / writes intermediate state via parquet (or qs2-equivalent for
 non-tabular state like the fitted UMAP model).
 
@@ -589,7 +589,7 @@ Without doing the full stage caching refactor today, two small habits
 keep Option A on the table:
 
 1. **Don't bake "keypapers in fit" into more places**. The current
-   coupling lives in `scripts/run_bertopic_gpu.py`. As long as the
+   coupling lives in `scripts/runpod/run_bertopic_gpu.py`. As long as the
    keypaper handling stays localised, switching to a project-after-fit
    model is a single-file refactor.
 2. **Treat `is_relevant` as a derived property of (topic assignments +

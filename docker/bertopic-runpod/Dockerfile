@@ -99,7 +99,7 @@ ADD https://github.com/runpod/runpodctl/releases/download/${RUNPODCTL_VERSION}/r
 RUN chmod +x /usr/local/bin/runpodctl
 
 # ---- scripts + idle watchdog ----------------------------------------------
-COPY scripts/run_bertopic_gpu.py            /opt/run_bertopic_gpu.py
+COPY scripts/runpod/run_bertopic_gpu.py     /opt/run_bertopic_gpu.py
 COPY docker/bertopic-runpod/entrypoint.sh   /entrypoint.sh
 COPY docker/bertopic-runpod/bertopic_idle_watchdog.sh \
                                             /usr/local/bin/bertopic_idle_watchdog.sh

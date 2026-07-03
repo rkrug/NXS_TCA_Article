@@ -171,7 +171,7 @@ The wrapper handles the upload + run + download cycle.
 seconds. The heartbeat is touched:
 
 - At boot, by the entrypoint
-- At start + after each step, by `scripts/run_bertopic_gpu.py`
+- At start + after each step, by `scripts/runpod/run_bertopic_gpu.py`
 - (Optional) manually during interactive SSH: `touch /work/.heartbeat`
 
 If `now - heartbeat_mtime ≥ IDLE_MIN`, the watchdog calls
@@ -241,6 +241,6 @@ Negligible vs the cost of running the pod.
 Once stable, this whole directory (Dockerfile, entrypoint, watchdog,
 README) lifts to
 `openalexVectorComp/inst/docker/bertopic-runpod/`. Same with
-`scripts/run_bertopic_gpu.py` →
+`scripts/runpod/run_bertopic_gpu.py` →
 `openalexVectorComp/inst/scripts/run_bertopic_gpu.py`. No project-side
 changes needed apart from updating the COPY paths in the Dockerfile.

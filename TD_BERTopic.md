@@ -225,5 +225,5 @@ The script is embedding-source-agnostic — it accepts any Arrow dataset with
    coloured patches roughly matching the contour underlay, with red keypaper
    triangles concentrated in just a few colour patches.
 5. **DAG** — `tar_visnetwork()` confirms `topics_tcac20` depends on
-   `emb_tcac20` and `emb_keypapers`, and `report_vectorisation` depends on
+   `emb_tcac20` and `emb_keypapers`, and `report_embeddings` depends on
    `topics_tcac20`.

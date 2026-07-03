@@ -78,7 +78,7 @@ When the local Metal GPU is too slow, host TEI on a rented RunPod A100/H100.
 1. **Build a pod image** with the merged SPECTER2 model baked in — or attach a
    persistent volume that already contains it at
    `/runpod-volume/specter2_proximity_merged/`.
-2. **Pod entrypoint**: run `./scripts/start_tei_runpod.sh` on the pod. It
+2. **Pod entrypoint**: run `./scripts/runpod/start_tei_runpod.sh` on the pod. It
    defaults to A100/H100-scale tuning (`max-batch-tokens 131072`,
    `max-concurrent 2048`, `max-client-batch-size 512`). Expose port 8080 via
    RunPod's HTTP proxy.

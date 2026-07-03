@@ -82,7 +82,9 @@ run_bertopic_runpod <- function(
   # marker's stored cfg_hash matches the current cfg's hash — so changing
   # bertopic params (or SSH details, since they're part of cfg) re-runs the
   # job automatically.
-  current_cfg_hash <- .topics_cfg_hash(cfg)
+  current_cfg_hash <- paste0(
+    .topics_cfg_hash(cfg), "_", .reference_fingerprint(reference_emb_dir)
+  )
   if (file.exists(marker_path) && file.exists(topic_info_path)) {
     marker <- read_topics_marker(leaf_dir)
     if (!is.na(marker$cfg_hash) &&

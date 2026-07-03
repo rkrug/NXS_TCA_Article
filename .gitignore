@@ -34,7 +34,7 @@ _freeze/
 *_files/
 *.html
 !README.html
-!TCAC 2.0 *Report.html
+!Reimaging TFC *Report.html
 *.pdf
 *.docx
 *.pptx

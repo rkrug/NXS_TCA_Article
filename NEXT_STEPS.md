@@ -57,6 +57,20 @@ reference input.
   if a true multi-set architecture (several coexisting keypaper sets) is
   wanted later.
 
+- [ ] **`runpod_v5_supervised` bertopic config** (added 2026-07-03, not yet
+  dispatched — `bertopic.active_runpod` still points at `runpod_v4`).
+  Different angle on the topic-collapse problem: supervised UMAP
+  (`supervised_umap: true`, `target_metric: categorical`, `target_weight:
+  1`) using concept labels as class targets instead of PCA+whitening on
+  raw SPECTER2 embeddings. Requires `concept_labels_path: input/key
+  definitions/key_definitions_v1.csv`, which doesn't exist yet — that file
+  needs to be created before this config can run. `hdbscan_min_cluster_size:
+  100` (raised from v4's, since the labelled structure should be cleaner)
+  and `keypaper_threshold: 1` (each concept keypaper should land in its
+  own topic, unlike v4's threshold of 3 for organically-clustered
+  keypapers). `ssh_host`/`ssh_port` are placeholders (`~`) to fill in once
+  a pod is dispatched for it.
+
 - [ ] **Finalise visualisations** for the reports.
   - [ ] Wire `viz_umap_density` / `viz_umap_hulls` /
     `viz_umap_cluster_pts` / `viz_umap_clusters_fig` as `tar_target()`s
@@ -65,15 +79,15 @@ reference input.
   - [ ] Tune `min_points`, `concavity` for the corpus-scale Path B
     output once the BERTopic fit is retuned.
   - [ ] Add the density+polygon figure to
-    [TCAC 2.0 Embedding Report.qmd](TCAC 2.0 Embedding Report.qmd) with
+    [Reimaging TFC Embedding Report.qmd](Reimaging TFC Embedding Report.qmd) with
     caption.
 
 - [ ] **Finalise the reports**.
   - [ ] Re-render
-    [TCAC 2.0 Embedding Report.qmd](TCAC 2.0 Embedding Report.qmd) with
+    [Reimaging TFC Embedding Report.qmd](Reimaging TFC Embedding Report.qmd) with
     the retuned Path B topics.
   - [ ] Re-render
-    [TCAC 2.0 Corpus Report.qmd](TCAC 2.0 Corpus Report.qmd)
+    [Reimaging TFC Corpus Report.qmd](Reimaging TFC Corpus Report.qmd)
     (TCAC 1.0 comparison removed in this fork).
   - [ ] Spot-check accessibility (alt text, contrast for the polygon
     layer).

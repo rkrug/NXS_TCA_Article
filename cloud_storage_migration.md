@@ -139,7 +139,7 @@ pipeline runs unchanged.
    `output/TCAC_2.0/embeddings/config=SPECTER2_runpod/` to
    `r2:tcac-2-0/embeddings/config=SPECTER2_runpod/`. One-time, ~50 min
    over your normal uplink. **Local copy stays put** — safety net.
-4. Update `scripts/run_bertopic_gpu.py` to read embeddings via duckdb's
+4. Update `scripts/runpod/run_bertopic_gpu.py` to read embeddings via duckdb's
    `httpfs` extension instead of from a local path:
 
    ```python
@@ -397,7 +397,7 @@ What re-runs vs what's cached after each phase:
   immediately. **No pod run.**
 - Viz topic targets re-evaluate; output qs2 hashes identical; cascade
   skip-guards.
-- `report_vectorisation` re-renders (~30 sec).
+- `report_embeddings` re-renders (~30 sec).
 - **Total: a few minutes of re-evaluation, zero recompute.**
 
 ### Phase 2 — only if done via migration helpers
@@ -451,7 +451,7 @@ accidentally.
 
 - **New**: `R/r2_helpers.R` — thin wrappers for keyring + endpoint
   config. ~30 lines.
-- **Modified**: `scripts/run_bertopic_gpu.py` — read embeddings via
+- **Modified**: `scripts/runpod/run_bertopic_gpu.py` — read embeddings via
   duckdb httpfs.
 - **Modified**: `R/run_bertopic_runpod.R` — drop rsync upload; pass
   small cfg yaml + small result download only.

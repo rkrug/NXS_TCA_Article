@@ -54,7 +54,9 @@ run_bertopic_local <- function(
   # bumped hdbscan_min_cluster_size), the hash mismatches and we re-run.
   # The Python script overwrites the three output parquets, so we don't
   # need to wipe the leaf first.
-  current_cfg_hash <- .topics_cfg_hash(cfg)
+  current_cfg_hash <- paste0(
+    .topics_cfg_hash(cfg), "_", .reference_fingerprint(reference_emb_dir)
+  )
   if (file.exists(marker_path) && file.exists(topic_info_path)) {
     marker <- read_topics_marker(leaf_dir)
     if (!is.na(marker$cfg_hash) &&
@@ -176,6 +178,31 @@ write_topics_marker <- function(leaf_dir, run_name, cfg_hash) {
   }
   cfg_sorted <- cfg[order(names(cfg))]
   digest::digest(cfg_sorted, algo = "xxhash64")
+}
+
+# Lightweight content-sensitive fingerprint of a reference (keypaper)
+# embedding directory, folded into the skip-guard hash alongside cfg.
+# .topics_cfg_hash() alone can't detect "the keypaper SET changed but
+# bertopic params didn't" — e.g. swapping the keypaper input file and
+# re-embedding produces an identical cfg_hash, so the skip-guard would
+# silently keep serving results scored against the OLD keypaper set. This
+# closes that gap by fingerprinting the files that will actually be scored.
+# Uses path + size + mtime rather than full content hashing — cheap even
+# for large leaves, and any real change (new/removed/rewritten parquet)
+# touches at least one of these.
+.reference_fingerprint <- function(reference_emb_dir) {
+  files <- list.files(
+    reference_emb_dir, recursive = TRUE, full.names = TRUE,
+    pattern = "\\.parquet$"
+  )
+  if (!length(files)) return(NA_character_)
+  info <- file.info(files)
+  fp <- paste(
+    sort(paste(basename(files), info$size, format(info$mtime, "%Y%m%d%H%M%S"))),
+    collapse = "|"
+  )
+  if (!requireNamespace("digest", quietly = TRUE)) return(fp)
+  digest::digest(fp, algo = "xxhash64")
 }
 
 # Local null-coalescing for use inside the function above. Kept private; the

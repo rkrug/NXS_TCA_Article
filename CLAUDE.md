@@ -75,7 +75,7 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
    SPECTER2) writes them to `input/embeddings/…/source=keypaper/…`, so a
    changed keypaper set is re-embedded. Corpus embeddings are mirrored to
    Cloudflare R2 for the RunPod BERTopic dispatch (see
-   `scripts/sync_embeddings_to_r2.sh`).
+   `scripts/runpod/sync_embeddings_to_r2.sh`).
 7. **Keypaper similarity** — `score_keypapers()` per variant, chunked
    per parquet file to avoid OOM. Output: `pairwise-cosine.parquet`
    under `output/TCAC_2.0/scores/`.
@@ -89,14 +89,14 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
    topic overlays, per-keypaper diagnostics. Most consumers read narrow
    slices via arrow pushdown rather than materialising the full corpus.
 10. **Reports** — Quarto reports rendered as `tar_quarto` targets:
-    - `report_vectorisation` → `TCAC 2.0 Embedding Report.qmd`
+    - `report_embeddings` → `Reimaging TFC Embedding Report.qmd`
       (corpus stats, embedding quality, keypaper coherence).
-    - `report_topic_modelling` → `TCAC 2.0 Topic Modelling Report.qmd`
+    - `report_topic_modelling` → `Reimaging TFC Topic Modelling Report.qmd`
       (BERTopic diagnostics, keypaper coverage per topic).
 
-    `TCAC 2.0 Corpus Report.qmd` is no longer auto-rendered by the
+    `Reimaging TFC Corpus Report.qmd` is no longer auto-rendered by the
     pipeline (its `report_corpus` target was removed) — render it
-    manually with `quarto::quarto_render("TCAC 2.0 Corpus Report.qmd")`
+    manually with `quarto::quarto_render("Reimaging TFC Corpus Report.qmd")`
     when needed. Its upstream targets (`count_st`, `yearly_counts`,
     `corpus_tcac20`, `key_works`, etc.) are untouched and may still
     feed other things.
@@ -189,7 +189,7 @@ targets::tar_load(corpus_tcac20)
 Render a report directly (bypass tar_quarto):
 
 ```r
-quarto::quarto_render("TCAC 2.0 Corpus Report.qmd")
+quarto::quarto_render("Reimaging TFC Corpus Report.qmd")
 ```
 
 ## Notes

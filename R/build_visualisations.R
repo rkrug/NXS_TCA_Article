@@ -455,63 +455,246 @@ build_viz_threshold_fig <- function(
 }
 
 # ---- 5b. Top matches per keypaper -----------------------------------------
-# For each of N randomly-chosen keypapers, list its top-K corpus matches
-# by max cosine similarity (title_abstract variant). Concrete sanity
-# check that the embedding "makes sense".
+# For EVERY keypaper, its top-N corpus matches by cosine similarity (
+# title_abstract variant). Feeds the interactive dropdown + histogram + table
+# (build_tbl_top_matches_per_kp_widget()) in the Embedding Report — a
+# static HTML report can't query the 4.6M-row corpus live, so this bounds
+# what's shipped to the browser to n_matches per keypaper. n_matches = 1000
+# stays small enough for a self-contained HTML widget (44 keypapers x 1000 =
+# 44k rows; confirmed not sluggish in practice) while giving the per-keypaper
+# histogram/table a fuller distribution to show than a bare top handful.
+#
+# Implementation: one duckdb ORDER BY ... LIMIT query per keypaper column,
+# reading the scores parquet directly — duckdb's columnar pushdown means
+# each query only reads the id + that one keypaper's column, not the full
+# ~45-column x 4.6M-row file.
 
 build_viz_top_matches_per_kp_data <- function(
   scores_tcac20_title_abstract,
   key_works,
   corpus_tcac20,
-  n_keypapers = 5L,
-  n_matches = 5L,
-  seed = 13L
+  n_matches = 1000L
 ) {
-  scores_root <- file.path(scores_tcac20_title_abstract, "..", "..")
+  if (
+    !requireNamespace("duckdb", quietly = TRUE) ||
+      !requireNamespace("DBI", quietly = TRUE)
+  ) {
+    stop("Packages 'duckdb' and 'DBI' are required.")
+  }
+  f <- scores_tcac20_title_abstract
+  if (!file.exists(f)) stop("Scores parquet not found: ", f)
 
-  # Read keypaper id list once (every non-metadata column is a keypaper id)
-  cols <- names(
-    arrow::open_dataset(scores_root) |>
-      head(0) |>
-      dplyr::collect()
-  )
-  kp_cols <- setdiff(cols, c("id", "variant"))
-  set.seed(seed)
-  picked <- sort(sample(kp_cols, min(n_keypapers, length(kp_cols))))
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
 
-  # Pull just (id + picked columns) for the title_abstract variant.
-  variant_filter <- "title_abstract"
-  scores_pick <- arrow::open_dataset(scores_root) |>
-    dplyr::filter(variant == variant_filter) |>
-    dplyr::select(id, dplyr::all_of(picked)) |>
-    dplyr::collect()
+  cols <- names(DBI::dbGetQuery(
+    con, sprintf("SELECT * FROM read_parquet('%s') LIMIT 0", f)
+  ))
+  # See read_scores_long() for why config/variant are excluded alongside id.
+  kp_cols <- setdiff(cols, c("id", "config", "variant"))
 
-  # Lookups for human-readable output
+  parts <- lapply(kp_cols, function(kp) {
+    sql <- sprintf(
+      'SELECT id AS match_id, "%s" AS similarity
+         FROM read_parquet(\'%s\')
+        WHERE "%s" IS NOT NULL
+        ORDER BY similarity DESC
+        LIMIT %d',
+      kp, f, kp, n_matches
+    )
+    d <- DBI::dbGetQuery(con, sql)
+    d$keypaper_id <- kp
+    d$rank <- seq_len(nrow(d))
+    d
+  })
+  matches <- dplyr::bind_rows(parts)
+
   kp_meta <- arrow::open_dataset(key_works) |>
     dplyr::select(id, title) |>
-    dplyr::filter(id %in% picked) |>
-    dplyr::collect()
-  corpus_meta <- arrow::open_dataset(corpus_tcac20) |>
-    dplyr::select(id, title, citation) |>
-    dplyr::filter(id %in% scores_pick$id) |>
-    dplyr::collect()
+    dplyr::collect() |>
+    dplyr::rename(keypaper_id = id, keypaper_title = title)
 
-  out <- lapply(picked, function(kp) {
-    sims <- scores_pick[[kp]]
-    top_idx <- order(sims, decreasing = TRUE)[seq_len(n_matches)]
-    match_ids <- scores_pick$id[top_idx]
-    tibble::tibble(
-      keypaper_id = kp,
-      keypaper_title = kp_meta$title[match(kp, kp_meta$id)],
-      keypaper_citation = kp_meta$title[match(kp, kp_meta$id)],
-      rank = seq_len(n_matches),
-      match_id = match_ids,
-      match_title = corpus_meta$title[match(match_ids, corpus_meta$id)],
-      match_citation = corpus_meta$citation[match(match_ids, corpus_meta$id)],
-      similarity = sims[top_idx]
+  corpus_meta <- arrow::open_dataset(corpus_tcac20) |>
+    dplyr::select(id, doi, title, citation) |>
+    dplyr::filter(id %in% unique(matches$match_id)) |>
+    dplyr::collect() |>
+    dplyr::rename(
+      match_id = id, match_doi = doi,
+      match_title = title, match_citation = citation
     )
-  })
-  dplyr::bind_rows(out)
+
+  matches |>
+    dplyr::left_join(kp_meta, by = "keypaper_id") |>
+    dplyr::left_join(corpus_meta, by = "match_id") |>
+    dplyr::mutate(match_link = dplyr::coalesce(match_doi, match_id)) |>
+    dplyr::select(
+      keypaper_id, keypaper_title,
+      rank, match_link, match_citation, match_title, similarity
+    ) |>
+    dplyr::arrange(keypaper_title, rank)
+}
+
+# Interactive dropdown (keypaper) + similarity-distribution histogram + DT
+# table (with CSV export) over build_viz_top_matches_per_kp_data()'s
+# precomputed top-N-per-keypaper pool. Client-side only (crosstalk) — no
+# server, works in the static report HTML. The histogram is a plotly trace
+# built on the same SharedData object as the table, so picking a keypaper in
+# the dropdown filters both — no separate reactive wiring needed, crosstalk
+# handles it via the shared `group`.
+build_tbl_top_matches_per_kp_widget <- function(
+  top_matches_per_kp,
+  tables_dir = "output/tables"
+) {
+  if (
+    !requireNamespace("crosstalk", quietly = TRUE) ||
+      !requireNamespace("DT", quietly = TRUE) ||
+      !requireNamespace("plotly", quietly = TRUE)
+  ) {
+    stop("Packages 'crosstalk', 'DT', and 'plotly' are required.")
+  }
+
+  df <- top_matches_per_kp |>
+    dplyr::transmute(
+      keypaper_label = keypaper_title,
+      keypaper = keypaper_id,
+      rank,
+      link = sprintf(
+        '<a href="%s" target="_blank" rel="noopener">%s</a>',
+        match_link,
+        htmltools::htmlEscape(match_link)
+      ),
+      citation = match_citation,
+      title = match_title,
+      similarity = round(similarity, 4)
+    )
+
+  sd <- crosstalk::SharedData$new(df, group = "tbl_top_matches_per_kp")
+
+  # Fixed "all keypapers" distribution line — a probability-density line
+  # showing the full-pool shape for reference. Rendered as its OWN plotly
+  # widget (own graph div), completely separate from the dropdown-filtered
+  # histogram below it — putting both traces in one plot_ly() call let
+  # crosstalk's filtering apply to the whole graph (including the
+  # non-SharedData trace), making the "always shown" line disappear on
+  # selection. Two independent widgets can't have that problem: this one
+  # has no SharedData anywhere in it, so crosstalk has nothing to attach a
+  # filter listener to.
+  #
+  # Uses identical bin edges as the histogram (explicit `xbins` there,
+  # matching breaks used here) and `histnorm = "probability"` on the
+  # histogram so the two are shape-comparable despite the "all" line
+  # covering ~40x more rows than a single filtered keypaper.
+  sim_rng <- range(df$similarity, na.rm = TRUE)
+  n_bins <- 40L
+  bin_width <- diff(sim_rng) / n_bins
+  breaks <- seq(sim_rng[1], sim_rng[2], length.out = n_bins + 1L)
+
+  all_dist <- df |>
+    dplyr::mutate(
+      bin = cut(similarity, breaks, include.lowest = TRUE, labels = FALSE)
+    ) |>
+    dplyr::count(bin) |>
+    dplyr::mutate(
+      x_mid = (breaks[bin] + breaks[bin + 1L]) / 2,
+      density = n / sum(n)
+    )
+
+  p_all <- plotly::plot_ly(
+    all_dist, x = ~x_mid, y = ~density, height = 110,
+    type = "scatter", mode = "lines",
+    line = list(color = "red", width = 1.5, shape = "spline"),
+    name = "all keypapers"
+  ) |>
+    plotly::layout(
+      xaxis = list(title = "", range = sim_rng),
+      yaxis = list(title = "all (density)"),
+      margin = list(t = 10, b = 10),
+      showlegend = FALSE
+    )
+
+  p_kp <- plotly::plot_ly(height = 200) |>
+    plotly::add_histogram(
+      data = sd, x = ~similarity,
+      xbins = list(start = sim_rng[1], end = sim_rng[2], size = bin_width),
+      histnorm = "probability",
+      marker = list(color = "#377EB8"),
+      name = "selected keypaper"
+    ) |>
+    plotly::layout(
+      xaxis = list(title = "similarity", range = sim_rng),
+      yaxis = list(title = "selected (probability)"),
+      bargap = 0.05,
+      margin = list(t = 10),
+      showlegend = FALSE
+    )
+
+  hist <- htmltools::tagList(p_all, p_kp)
+
+  w <- crosstalk::bscols(
+    widths = c(3, 9),
+    list(
+      htmltools::tagList(
+        # Scoped to just this select control so it doesn't shrink the
+        # table/histogram text too.
+        htmltools::tags$style(
+          ".tbl-top-matches-kp-select .selectize-input,
+           .tbl-top-matches-kp-select .selectize-dropdown { font-size: 12px; }"
+        ),
+        htmltools::div(
+          class = "tbl-top-matches-kp-select",
+          crosstalk::filter_select(
+            "kp_select", "Keypaper", sd, ~keypaper_label, multiple = FALSE
+          )
+        )
+      )
+    ),
+    list(
+      hist,
+      htmltools::tagList(
+        # "compact" (DT's built-in class) tightens row padding; the
+        # explicit font-size rules are what actually shrink the table text
+        # and the CSV button text — scoped to this table's wrapper class so
+        # they don't affect the dropdown/histogram.
+        htmltools::tags$style(
+          ".tbl-top-matches-per-kp table.dataTable { font-size: 12px; }
+           .tbl-top-matches-per-kp .dt-buttons .dt-button { font-size: 12px; }"
+        ),
+        htmltools::div(
+          class = "tbl-top-matches-per-kp",
+          DT::datatable(
+            sd,
+            rownames = FALSE,
+            escape = FALSE,
+            class = "compact stripe hover",
+            extensions = "Buttons",
+            options = list(
+              pageLength = 25,
+              order = list(list(2, "asc")),
+              columnDefs = list(list(visible = FALSE, targets = 0)),
+              dom = "Bfrtip",
+              buttons = list("csv")
+            ),
+            caption = paste0(
+              "Top ", format(max(top_matches_per_kp$rank), big.mark = ","),
+              " corpus matches per keypaper (title_abstract variant). Pick ",
+              "a keypaper; download the filtered rows as CSV via the ",
+              "button above the table."
+            )
+          )
+        )
+      )
+    )
+  )
+  # bscols() returns a shiny.tag (dropdown + slider + table combined), not a
+  # bare htmlwidget — htmlwidgets::saveWidget() (used by save_widget_html())
+  # can't resolve its crosstalk dependencies and errors deep in htmltools.
+  # htmltools::save_html() handles tag lists correctly; it writes JS/CSS as
+  # sibling files under `<name>_files/` rather than inlining everything into
+  # one file, so the .html and its `_files/` dir must travel together.
+  ensure_figures_dir(tables_dir)
+  save_html_path <- file.path(tables_dir, "tbl_top_matches_per_kp.html")
+  htmltools::save_html(w, save_html_path)
+  w
 }
 
 # ---- 5c. Text length distribution per variant -----------------------------
