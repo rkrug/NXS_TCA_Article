@@ -275,6 +275,22 @@ list(
     }
   ),
 
+  # Kept as separate un-hashed targets (rather than a field on
+  # bertopic_local_cfg/bertopic_runpod_cfg) because .topics_cfg_hash()
+  # hashes the whole cfg object for the skip-guard marker comparison —
+  # folding run_name into cfg would change that hash for every config and
+  # force a spurious one-time re-run/re-dispatch on the next invocation.
+  if (!is.null(cfg$bertopic$active_local)) {
+    tar_target(
+      bertopic_local_run_name,
+      yaml::read_yaml(config_file)$bertopic$active_local
+    )
+  },
+  tar_target(
+    bertopic_runpod_run_name,
+    yaml::read_yaml(config_file)$bertopic$active_runpod
+  ),
+
   # Path A — local CPU sample-fit + transfer. Self-contained on the laptop.
   # corpus_emb_dir / reference_emb_dir resolve to the source-level dir via
   # dirname() of the primary variant target; the Python script discovers
@@ -288,7 +304,7 @@ list(
         reference_emb_dir = dirname(emb_keypapers_title_abstract),
         out_dir = "output/TCAC_2.0/topics",
         cfg = bertopic_local_cfg,
-        run_name = yaml::read_yaml(config_file)$bertopic$active_local,
+        run_name = bertopic_local_run_name,
         fallback_corpus = emb_tcac20_title,
         fallback_ref = emb_keypapers_title
       ),
@@ -324,7 +340,7 @@ list(
       reference_emb_dir = dirname(emb_keypapers_title_abstract),
       out_dir = "output/TCAC_2.0/topics",
       cfg = bertopic_runpod_cfg,
-      run_name = yaml::read_yaml(config_file)$bertopic$active_runpod,
+      run_name = bertopic_runpod_run_name,
       fallback_corpus = emb_tcac20_title,
       fallback_ref = emb_keypapers_title,
       keypaper_r2_synced = emb_keypapers_r2_synced
@@ -634,6 +650,36 @@ list(
     report_topic_modelling,
     path = "Reimaging TFC Topic Modelling Report.qmd",
     quiet = TRUE
+  ),
+
+  # Extracted as its own target (rather than reading config_file inline in
+  # report_topic_modelling_named) so unrelated config.yaml edits don't
+  # register as a "changed" dependency for the copy step below — targets
+  # content-hashes this target's output, so the copy only re-runs when the
+  # active_for_viz *value* actually changes.
+  tar_target(
+    bertopic_active_for_viz,
+    yaml::read_yaml(config_file)$bertopic$active_for_viz
+  ),
+
+  # Archive a per-config copy alongside the plain rendered report, so
+  # switching bertopic.active_for_viz (e.g. runpod_v4 -> runpod_v5_supervised)
+  # doesn't overwrite the previous config's report — each config gets its own
+  # tracked file. Re-copies whenever the render or active_for_viz changes.
+  tar_target(
+    report_topic_modelling_named,
+    {
+      dest <- file.path(
+        dirname(report_topic_modelling),
+        paste0(
+          "Reimaging TFC Topic Modelling Report - ",
+          bertopic_active_for_viz, ".html"
+        )
+      )
+      file.copy(report_topic_modelling, dest, overwrite = TRUE)
+      dest
+    },
+    format = "file"
   ),
 
   NULL

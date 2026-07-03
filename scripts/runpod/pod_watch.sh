@@ -33,7 +33,10 @@
 # to the log file, re-rendered every PLOT_INTERVAL seconds by
 # plot_pod_watch.R running in the background — open it once in macOS
 # Preview (open output/pod_logs/*.png) and it auto-refreshes as the file
-# changes. Set PLOT_INTERVAL=0 to disable.
+# changes. On macOS a self-refreshing browser tab (pod_watch_*.monitor.html)
+# is also opened automatically, polling the PNG every PLOT_INTERVAL seconds —
+# useful when Preview's own file-watch reload lags. Set PLOT_INTERVAL=0 to
+# disable both.
 set -euo pipefail
 
 PLOT_INTERVAL="${PLOT_INTERVAL:-10}"
@@ -72,6 +75,24 @@ if [[ "${PLOT_INTERVAL}" -gt 0 ]]; then
     PLOT_PID="$!"
     trap '[[ -n "${PLOT_PID}" ]] && kill "${PLOT_PID}" 2>/dev/null' EXIT INT TERM
     echo "→ live plot: ${LOG_FILE%.log}.png (refreshes every ${PLOT_INTERVAL}s; open it in Preview)"
+
+    # Also open a self-refreshing browser tab on macOS, so the plot updates
+    # live without needing Preview's own (sometimes laggy) file-watch reload.
+    # Cache-busted via a Date.now() query string since file:// URLs are
+    # otherwise aggressively cached by the browser.
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        PNG_PATH="$(cd "${LOG_DIR}" && pwd)/$(basename "${LOG_FILE%.log}.png")"
+        MONITOR_HTML="${LOG_FILE%.log}.monitor.html"
+        REFRESH_MS=$(( PLOT_INTERVAL * 1000 ))
+        cat > "${MONITOR_HTML}" << EOF
+<html><body style="margin:0;background:#000">
+<img id="i" src="file://${PNG_PATH}" style="max-width:100vw;max-height:100vh">
+<script>setInterval(()=>{document.getElementById('i').src='file://${PNG_PATH}?'+Date.now()},${REFRESH_MS})</script>
+</body></html>
+EOF
+        open "${MONITOR_HTML}"
+        echo "→ live monitor tab: ${MONITOR_HTML}"
+    fi
 fi
 
 # tee captures stdout to the log while still showing in the terminal.

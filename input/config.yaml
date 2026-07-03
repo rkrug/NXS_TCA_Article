@@ -88,8 +88,8 @@ r2:
 # under `configs:` and pointing one of the `active_*` keys at the new name.
 bertopic:
   active_local:   ~                    # which entry drives topics_tcac20_local, ~ for disabled
-  active_runpod:  runpod_v4            # which entry drives topics_tcac20_runpod
-  active_for_viz: runpod_v4            # which run feeds viz_topics_* in the report
+  active_runpod:  runpod_v5_supervised            # which entry drives topics_tcac20_runpod
+  active_for_viz: runpod_v5_supervised            # which run feeds viz_topics_* in the report
 
   configs:
     default_local:
@@ -264,8 +264,8 @@ bertopic:
     # toward 0.0 if the layout becomes too rigid.
     runpod_v5_supervised:
       method: runpod
-      ssh_host:        ~          # fill in after pod creation
-      ssh_port:        ~
+      ssh_host:        64.247.206.214          # fill in after pod creation
+      ssh_port:        12492
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work

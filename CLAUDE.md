@@ -93,6 +93,10 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
       (corpus stats, embedding quality, keypaper coherence).
     - `report_topic_modelling` → `Reimaging TFC Topic Modelling Report.qmd`
       (BERTopic diagnostics, keypaper coverage per topic).
+      `report_topic_modelling_named` then copies the rendered html to
+      `Reimaging TFC Topic Modelling Report - <active_for_viz>.html`, so
+      each `bertopic.active_for_viz` config keeps its own archived report
+      instead of being overwritten when the config changes.
 
     `Reimaging TFC Corpus Report.qmd` is no longer auto-rendered by the
     pipeline (its `report_corpus` target was removed) — render it
