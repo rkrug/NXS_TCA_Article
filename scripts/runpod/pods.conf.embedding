@@ -21,7 +21,7 @@
 # Self-contained image: the merged SPECTER2 (proximity adapter) model is
 # baked in at build time (see docker/tei-runpod/README.md) — no volume
 # mount, no first-boot download. Bump the tag after rebuilding/pushing.
-IMAGE="ghcr.io/rkrug/tei-specter2:proximity-v0.1.1"
+IMAGE="ghcr.io/rkrug/tei-specter2:proximity-v0.1.2"
 
 # GPU type id exactly as RunPod expects it. List available ids with:
 #   curl -s https://rest.runpod.io/v1/gpuTypes \

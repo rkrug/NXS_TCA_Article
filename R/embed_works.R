@@ -23,7 +23,8 @@ embed_works <- function(
   cfg,
   variant_name,
   preprocessor,
-  preprocessor_args = list()
+  preprocessor_args = list(),
+  assessment = NULL
 ) {
   if (!source %in% c("corpus", "keypaper")) {
     stop("`source` must be 'corpus' or 'keypaper', got: ", source)
@@ -43,6 +44,13 @@ embed_works <- function(
     paste0("source=",  source),
     paste0("variant=", variant_name)
   )
+  # Optional per-assessment sub-partition. Each assessment becomes its own
+  # leaf (own skip-guard marker), so re-embedding one assessment leaves the
+  # other's embeddings untouched. Readers open the parent variant= dir and
+  # arrow globs both assessment leaves transparently.
+  if (!is.null(assessment) && nzchar(assessment)) {
+    leaf_dir <- file.path(leaf_dir, paste0("assessment=", assessment))
+  }
 
   # ---- Skip guard ---------------------------------------------------------
   # Marker-based wholeness check:
@@ -122,6 +130,26 @@ embed_works <- function(
     unlink(leaf_dir, recursive = TRUE)
   }
 
+  # ---- Merge fresh connection / throughput config -----------------------
+  # The caller passes only the value-affecting config fields (model,
+  # sep_token, title_cap_combined, pilot_n) so that changing the TEI host or
+  # tuning batch/concurrency does NOT invalidate the embedding targets. The
+  # connection/throughput fields are read fresh here (untracked by targets)
+  # from the active config block in input/config.yaml.
+  conn <- tryCatch(
+    yaml::read_yaml("input/config.yaml")$embeddings$configs[[config_name]],
+    error = function(e) NULL
+  )
+  conn_fields <- c("host", "port", "scheme", "auth_token_keyring",
+                   "batch_size", "max_batch_size", "concurrency")
+  if (!is.null(conn)) {
+    cfg <- utils::modifyList(cfg, conn[intersect(names(conn), conn_fields)])
+  }
+  if (is.null(cfg$host) || is.null(cfg$port)) {
+    stop("embed_works: no host/port resolved for config '", config_name,
+         "'. Check embeddings.configs.", config_name, " in input/config.yaml.")
+  }
+
   # ---- Backend -----------------------------------------------------------
   backend <- build_tei_backend(cfg)
   info <- openalexVectorComp::backend_info(backend)
@@ -137,6 +165,9 @@ embed_works <- function(
   scratch_project <- file.path(
     out_dir, ".raw", config_name, source, variant_name
   )
+  if (!is.null(assessment) && nzchar(assessment)) {
+    scratch_project <- file.path(scratch_project, assessment)
+  }
   unlink(scratch_project, recursive = TRUE)
   dir.create(scratch_project, recursive = TRUE, showWarnings = FALSE)
   file.symlink(

@@ -13,18 +13,39 @@ if (rl$rate_limit$daily_remaining_usd < 0.1) {
 
 lapply(list.files("R", pattern = "\\.R$", full.names = TRUE), source)
 
-# Operational config — not tracked, changes do not invalidate targets
+# Config is read here and specific values are hoisted into narrow globals.
+# IMPORTANT: reference these narrow globals (not `cfg$...`) inside target
+# commands. A target whose command mentions `cfg` takes a dependency on the
+# WHOLE config object, so any edit to config.yaml (even an unrelated one like
+# the embedding host) invalidates it. The zotero/ids/corpus download chain is
+# expensive, so its inputs are pinned to dedicated scalars below.
 cfg <- yaml::read_yaml("input/config.yaml")
 workers <- cfg$workers
 emb_name <- cfg$embeddings$active
-emb_cfg <- cfg$embeddings$configs[[emb_name]]
-if (is.null(emb_cfg)) {
+emb_cfg_full <- cfg$embeddings$configs[[emb_name]]
+if (is.null(emb_cfg_full)) {
   stop(
     "embeddings.active '",
     emb_name,
     "' not found under embeddings.configs in config.yaml"
   )
 }
+# Connection + throughput fields are dropped from the *tracked* embedding
+# config, so changing the TEI host (every new pod) or tuning batch/concurrency
+# does NOT invalidate already-computed embeddings. embed_works() reads these
+# fresh from config.yaml at runtime. Only value-affecting fields (model,
+# sep_token, title_cap_combined, pilot_n) remain tracked in emb_cfg.
+emb_volatile <- c(
+  "host", "port", "scheme", "auth_token_keyring",
+  "batch_size", "max_batch_size", "concurrency",
+  "max_batch_tokens", "max_concurrent"
+)
+emb_cfg <- emb_cfg_full[setdiff(names(emb_cfg_full), emb_volatile)]
+# Zotero download inputs — pinned so unrelated config.yaml edits don't
+# re-trigger the (slow) group downloads.
+zotero_tca_id  <- cfg$zotero$assessments$tca$id
+zotero_nxs_id  <- cfg$zotero$assessments$nxs$id
+zotero_keyring <- cfg$zotero$api_key_keyring
 # Sys.setenv(OVC_API_TOKEN = keyring::key_get("API_openai"))  # only when provider == openai
 
 tar_option_set(
@@ -35,7 +56,9 @@ tar_option_set(
     "openalexSnapshot",
     "openalexVectorComp",
     "future",
-    "furrr"
+    "furrr",
+    "httr2",
+    "jsonlite"
   ),
   format = "rds"
 )
@@ -43,112 +66,279 @@ tar_option_set(
 list(
   # Input file tracking -------------------------------------------------------
 
-  tar_target(st_tfc_fn, "input/search terms/tfc_TCAC_2.0.txt", format = "file"),
   tar_target(
-    st_nature_fn,
-    "input/search terms/nature_TCAC_2.0.txt",
+    kd_raw_fn,
+    "input/key papers/TCA and Nexus Definitions.csv",
     format = "file"
   ),
-  tar_target(
-    kp_raw_fn,
-    "input/key papers/key_papers.csv",
-    format = "file"
-  ),
-  tar_target(types_filter_fn, "input/openalex_types.csv", format = "file"),
-
-  # Search terms --------------------------------------------------------------
-
-  tar_target(tfc_st, paste(readLines(st_tfc_fn), collapse = "\n")),
-  tar_target(nature_st, paste(readLines(st_nature_fn), collapse = "\n")),
-  tar_target(tca_st, paste0("(\n", nature_st, "\n)\nAND\n(\n", tfc_st, "\n)")),
-
-  # Types filter --------------------------------------------------------------
-
-  tar_target(types_filter, {
-    read.csv(types_filter_fn) |>
-      dplyr::filter(Included) |>
-      dplyr::pull(Type)
-  }),
 
   # Key papers ----------------------------------------------------------------
 
   tar_target(
     key_works,
-    prepare_key_works(kp_raw_fn),
+    prepare_key_definitions(kd_raw_fn),
     format = "file"
   ),
 
-  # Count of matching works ---------------------------------------------------
+  # Zotero assessment libraries ------------------------------------------------
+  # Two curated IPBES Zotero groups define the corpus membership: the TCA
+  # assessment group (public) and the NXS assessment literature group
+  # (private — needs a Zotero API key with group access).
 
   tar_target(
-    count_st,
-    get_count(tfc_st, nature_st, tca_st, types_filter, workers = workers),
-    format = "file"
-  ),
-
-  # Yearly counts on OpenAlex for the universe + each search bucket --------
-  tar_target(
-    yearly_counts,
-    get_yearly_counts(tfc_st, nature_st, tca_st),
-    format = "file"
-  ),
-
-  # TCAC 2.0 corpus — STATIC INPUT (fork) -------------------------------------
-  # Frozen clone of the upstream TCAC 2.0 corpus, moved into input/ and never
-  # re-extracted here. The upstream `TCAC 2.0` repo owns corpus generation;
-  # this fork only consumes it. (Upstream: ids_tcac20 -> get_corpus_from_snapshot.)
-
-  tar_target(
-    corpus_tcac20,
-    "input/corpus",
-    format = "file"
-  ),
-
-  # TCAC 2.0 corpus embeddings — STATIC INPUT (fork) -------------------------
-  # Frozen clones of the upstream SPECTER2 corpus embeddings, moved into
-  # input/embeddings and never recomputed here. One file target per variant,
-  # laid out as config=<emb_name>/source=corpus/variant=<v> so downstream
-  # dirname() resolution is identical to the upstream producer shape.
-  # (Upstream: embed_works(source="corpus") into output/TCAC_2.0/embeddings.)
-
-  tar_target(
-    emb_tcac20_title,
-    file.path(
-      "input/embeddings",
-      paste0("config=", emb_name),
-      "source=corpus",
-      "variant=title"
+    zotero_tca,
+    download_zotero_assessment(
+      assessment_id = zotero_tca_id,
+      assessment_label = "tca",
+      api_key = NULL,
+      output_root = "output/NXS_TCA_corpus/zotero"
     ),
     format = "file"
   ),
   tar_target(
-    emb_tcac20_abstract,
-    file.path(
-      "input/embeddings",
-      paste0("config=", emb_name),
-      "source=corpus",
-      "variant=abstract"
+    zotero_nxs,
+    download_zotero_assessment(
+      assessment_id = zotero_nxs_id,
+      assessment_label = "nxs",
+      api_key = keyring::key_get(zotero_keyring),
+      output_root = "output/NXS_TCA_corpus/zotero"
+    ),
+    format = "file"
+  ),
+
+  # Match Zotero items to OpenAlex ids via DOI ---------------------------------
+
+  tar_target(
+    ids_tca,
+    get_ids_from_dois(
+      zotero_tca,
+      project_folder = "output/NXS_TCA_corpus/_scratch/tca",
+      workers = workers,
+      dest_dir = "output/NXS_TCA_corpus/ids/assessment=tca"
     ),
     format = "file"
   ),
   tar_target(
-    emb_tcac20_title_abstract,
-    file.path(
-      "input/embeddings",
-      paste0("config=", emb_name),
-      "source=corpus",
-      "variant=title_abstract"
+    ids_nxs,
+    get_ids_from_dois(
+      zotero_nxs,
+      project_folder = "output/NXS_TCA_corpus/_scratch/nxs",
+      workers = workers,
+      dest_dir = "output/NXS_TCA_corpus/ids/assessment=nxs"
     ),
+    format = "file"
+  ),
+
+  # Extract full records from the local OpenAlex snapshot, hive-partitioned
+  # by assessment (assessment=tca / assessment=nxs) under one corpus root ----
+
+  tar_target(
+    corpus_tca,
+    get_corpus_from_snapshot(
+      ids_db = ids_tca,
+      snapshot_dir = "input/snapshot",
+      project_folder = "output/NXS_TCA_corpus/_scratch/tca",
+      workers = workers,
+      zotero_path = zotero_tca,
+      dest_dir = "output/NXS_TCA_corpus/corpus/assessment=tca"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    corpus_nxs,
+    get_corpus_from_snapshot(
+      ids_db = ids_nxs,
+      snapshot_dir = "input/snapshot",
+      project_folder = "output/NXS_TCA_corpus/_scratch/nxs",
+      workers = workers,
+      zotero_path = zotero_nxs,
+      dest_dir = "output/NXS_TCA_corpus/corpus/assessment=nxs"
+    ),
+    format = "file"
+  ),
+
+  # Combined corpus dataset — both assessment branches must exist before the
+  # shared hive root is considered ready; downstream consumers read this
+  # root and see both assessment=tca and assessment=nxs partitions.
+
+  tar_target(
+    corpus,
+    {
+      force(corpus_tca)
+      force(corpus_nxs)
+      dirname(corpus_tca)
+    },
+    format = "file"
+  ),
+
+  # Per-assessment pilot subsets (first emb_cfg$pilot_n rows; n = NULL → the
+  # whole assessment corpus). Split per assessment so the tca and nxs
+  # embedding flows are fully independent.
+
+  tar_target(
+    pilot_corpus_tca,
+    make_pilot_subset(
+      corpus_path = corpus_tca,
+      out_dir = file.path("output/NXS_TCA_corpus", paste0("pilot_tca_n", emb_cfg$pilot_n)),
+      n = emb_cfg$pilot_n
+    ),
+    format = "file"
+  ),
+  tar_target(
+    pilot_corpus_nxs,
+    make_pilot_subset(
+      corpus_path = corpus_nxs,
+      out_dir = file.path("output/NXS_TCA_corpus", paste0("pilot_nxs_n", emb_cfg$pilot_n)),
+      n = emb_cfg$pilot_n
+    ),
+    format = "file"
+  ),
+
+  # Corpus embeddings → source=corpus, split per assessment × variant -------
+  # Each (assessment, variant) is its own embed_works leaf
+  # (…/variant=<v>/assessment=<a>/) with an independent skip-guard marker, so
+  # re-embedding one assessment (e.g. when NXS changes) never rebuilds the
+  # other's embeddings. The chapter-partitioned corpus embeds a work once per
+  # chapter it belongs to (embeddings are id-keyed → identical vectors under
+  # each chapter); accepted duplication.
+  #
+  # The emb_corpus_<variant> targets below combine the two assessment leaves
+  # by returning the parent variant= dir — downstream consumers
+  # (score_keypapers, viz, BERTopic) open that dir and arrow reads both
+  # assessment leaves, so they need no change.
+
+  tar_target(
+    emb_corpus_tca_title,
+    embed_works(
+      corpus_path = pilot_corpus_tca,
+      out_dir = "output/NXS_TCA_corpus/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "title",
+      preprocessor = variant_preprocessor("title", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title", emb_cfg)$args,
+      assessment = "tca"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_tca_abstract,
+    embed_works(
+      corpus_path = pilot_corpus_tca,
+      out_dir = "output/NXS_TCA_corpus/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "abstract",
+      preprocessor = variant_preprocessor("abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("abstract", emb_cfg)$args,
+      assessment = "tca"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_tca_title_abstract,
+    embed_works(
+      corpus_path = pilot_corpus_tca,
+      out_dir = "output/NXS_TCA_corpus/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "title_abstract",
+      preprocessor = variant_preprocessor("title_abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title_abstract", emb_cfg)$args,
+      assessment = "tca"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_nxs_title,
+    embed_works(
+      corpus_path = pilot_corpus_nxs,
+      out_dir = "output/NXS_TCA_corpus/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "title",
+      preprocessor = variant_preprocessor("title", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title", emb_cfg)$args,
+      assessment = "nxs"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_nxs_abstract,
+    embed_works(
+      corpus_path = pilot_corpus_nxs,
+      out_dir = "output/NXS_TCA_corpus/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "abstract",
+      preprocessor = variant_preprocessor("abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("abstract", emb_cfg)$args,
+      assessment = "nxs"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_nxs_title_abstract,
+    embed_works(
+      corpus_path = pilot_corpus_nxs,
+      out_dir = "output/NXS_TCA_corpus/embeddings",
+      source = "corpus",
+      config_name = emb_name,
+      cfg = emb_cfg,
+      variant_name = "title_abstract",
+      preprocessor = variant_preprocessor("title_abstract", emb_cfg)$prep,
+      preprocessor_args = variant_preprocessor("title_abstract", emb_cfg)$args,
+      assessment = "nxs"
+    ),
+    format = "file"
+  ),
+
+  # Combined corpus-embedding handles: return the parent variant= dir once
+  # both assessment leaves exist. Downstream targets depend on these (not the
+  # per-assessment leaves) and read both assessments via one open_dataset().
+
+  tar_target(
+    emb_corpus_title,
+    {
+      force(emb_corpus_tca_title)
+      force(emb_corpus_nxs_title)
+      dirname(emb_corpus_tca_title)
+    },
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_abstract,
+    {
+      force(emb_corpus_tca_abstract)
+      force(emb_corpus_nxs_abstract)
+      dirname(emb_corpus_tca_abstract)
+    },
+    format = "file"
+  ),
+  tar_target(
+    emb_corpus_title_abstract,
+    {
+      force(emb_corpus_tca_title_abstract)
+      force(emb_corpus_nxs_title_abstract)
+      dirname(emb_corpus_tca_title_abstract)
+    },
     format = "file"
   ),
 
   # Keypaper embeddings → source=keypaper, one target per variant ------------
+  # Shares the config= root with the corpus embeddings above — score_keypapers()
+  # requires corpus and reference embeddings to live under the same config dir.
 
   tar_target(
     emb_keypapers_title,
     embed_works(
       corpus_path = key_works,
-      out_dir = "input/embeddings",
+      out_dir = "output/NXS_TCA_corpus/embeddings",
       source = "keypaper",
       config_name = emb_name,
       cfg = emb_cfg,
@@ -162,7 +352,7 @@ list(
     emb_keypapers_abstract,
     embed_works(
       corpus_path = key_works,
-      out_dir = "input/embeddings",
+      out_dir = "output/NXS_TCA_corpus/embeddings",
       source = "keypaper",
       config_name = emb_name,
       cfg = emb_cfg,
@@ -176,7 +366,7 @@ list(
     emb_keypapers_title_abstract,
     embed_works(
       corpus_path = key_works,
-      out_dir = "input/embeddings",
+      out_dir = "output/NXS_TCA_corpus/embeddings",
       source = "keypaper",
       config_name = emb_name,
       cfg = emb_cfg,
@@ -192,32 +382,32 @@ list(
   # config root, so this is wire-compatible with the previous shape.
 
   tar_target(
-    scores_tcac20_title,
+    scores_title,
     score_keypapers(
-      corpus_emb_dir = dirname(emb_tcac20_title),
+      corpus_emb_dir = dirname(emb_corpus_title),
       reference_emb_dir = dirname(emb_keypapers_title),
       variant = "title",
-      out_dir = "output/TCAC_2.0/scores"
+      out_dir = "output/NXS_TCA_corpus/scores"
     ),
     format = "file"
   ),
   tar_target(
-    scores_tcac20_abstract,
+    scores_abstract,
     score_keypapers(
-      corpus_emb_dir = dirname(emb_tcac20_abstract),
+      corpus_emb_dir = dirname(emb_corpus_abstract),
       reference_emb_dir = dirname(emb_keypapers_abstract),
       variant = "abstract",
-      out_dir = "output/TCAC_2.0/scores"
+      out_dir = "output/NXS_TCA_corpus/scores"
     ),
     format = "file"
   ),
   tar_target(
-    scores_tcac20_title_abstract,
+    scores_title_abstract,
     score_keypapers(
-      corpus_emb_dir = dirname(emb_tcac20_title_abstract),
+      corpus_emb_dir = dirname(emb_corpus_title_abstract),
       reference_emb_dir = dirname(emb_keypapers_title_abstract),
       variant = "title_abstract",
-      out_dir = "output/TCAC_2.0/scores"
+      out_dir = "output/NXS_TCA_corpus/scores"
     ),
     format = "file"
   ),
@@ -298,14 +488,14 @@ list(
   # fallback variant targets are also DAG dependencies.
   if (!is.null(cfg$bertopic$active_local)) {
     tar_target(
-      topics_tcac20_local,
+      topics_local,
       run_bertopic_local(
-        corpus_emb_dir = dirname(emb_tcac20_title_abstract),
+        corpus_emb_dir = dirname(emb_corpus_title_abstract),
         reference_emb_dir = dirname(emb_keypapers_title_abstract),
-        out_dir = "output/TCAC_2.0/topics",
+        out_dir = "output/NXS_TCA_corpus/topics",
         cfg = bertopic_local_cfg,
         run_name = bertopic_local_run_name,
-        fallback_corpus = emb_tcac20_title,
+        fallback_corpus = emb_corpus_title,
         fallback_ref = emb_keypapers_title
       ),
       format = "file"
@@ -318,7 +508,7 @@ list(
   # keypaper embeddings change whenever the keypaper set changes and must be
   # re-pushed, or the pod silently scores against a stale set. This target
   # depends on all three emb_keypapers_* so it re-syncs whenever any of them
-  # change, and topics_tcac20_runpod takes it as a dep token below so the
+  # change, and topics_runpod takes it as a dep token below so the
   # sync always happens before dispatch.
   tar_target(
     emb_keypapers_r2_synced,
@@ -334,27 +524,27 @@ list(
   # Path B — RunPod GPU full-fit via cuml. SSH/rsync orchestrated by the
   # R wrapper; needs a pod up from the docker/bertopic-runpod image.
   tar_target(
-    topics_tcac20_runpod,
+    topics_runpod,
     run_bertopic_runpod(
-      corpus_emb_dir = dirname(emb_tcac20_title_abstract),
+      corpus_emb_dir = dirname(emb_corpus_title_abstract),
       reference_emb_dir = dirname(emb_keypapers_title_abstract),
-      out_dir = "output/TCAC_2.0/topics",
+      out_dir = "output/NXS_TCA_corpus/topics",
       cfg = bertopic_runpod_cfg,
       run_name = bertopic_runpod_run_name,
-      fallback_corpus = emb_tcac20_title,
+      fallback_corpus = emb_corpus_title,
       fallback_ref = emb_keypapers_title,
       keypaper_r2_synced = emb_keypapers_r2_synced
     ),
     format = "file"
   ),
 
-  # NOTE: the previous topics_tcac20 alias target tried to switch
-  # between Path A (topics_tcac20_local) and Path B (topics_tcac20_runpod)
+  # NOTE: the previous topics alias target tried to switch
+  # between Path A (topics_local) and Path B (topics_runpod)
   # via bertopic.active_for_viz. targets' static dependency analysis
   # treated BOTH referenced targets as deps regardless of which active
   # config was selected, so switching active_for_viz to default_runpod
   # still dispatched Path A. With Path B now the production path, the
-  # viz layer references topics_tcac20_runpod directly. Re-introduce
+  # viz layer references topics_runpod directly. Re-introduce
   # an alias mechanism only if comparison-across-runs viz is needed
   # later (see TODO_NamedKeypaperSets.md for the keypaper-set
   # comparison pattern).
@@ -368,15 +558,15 @@ list(
   tar_target(
     viz_scores_long,
     read_scores_long(
-      scores_tcac20_title,
-      scores_tcac20_abstract,
-      scores_tcac20_title_abstract
+      scores_title,
+      scores_abstract,
+      scores_title_abstract
     ),
     format = qs2_format()
   ),
   tar_target(
     viz_metadata,
-    viz_metadata_table(emb_tcac20_title),
+    viz_metadata_table(emb_corpus_title),
     format = qs2_format()
   ),
   tar_target(
@@ -414,9 +604,9 @@ list(
   tar_target(
     viz_top_matches_per_kp,
     build_viz_top_matches_per_kp_data(
-      scores_tcac20_title_abstract = scores_tcac20_title_abstract,
+      scores_title_abstract = scores_title_abstract,
       key_works = key_works,
-      corpus_tcac20 = corpus_tcac20
+      corpus = corpus
     ),
     format = qs2_format()
   ),
@@ -428,7 +618,7 @@ list(
   tar_target(
     viz_text_length_data,
     build_viz_text_length_data(
-      corpus_tcac20 = corpus_tcac20,
+      corpus = corpus,
       title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
       sep_token = emb_cfg$sep_token %||% "[SEP]"
     ),
@@ -451,7 +641,7 @@ list(
   ),
   tar_target(
     viz_score_year_data,
-    build_viz_score_year_data(viz_scores_long, corpus_tcac20),
+    build_viz_score_year_data(viz_scores_long, corpus),
     format = qs2_format()
   ),
   tar_target(
@@ -461,7 +651,7 @@ list(
   ),
   tar_target(
     viz_type_counts,
-    build_viz_type_counts(corpus_tcac20, min_pct = 0.5),
+    build_viz_type_counts(corpus, min_pct = 0.5),
     format = qs2_format()
   ),
   tar_target(
@@ -471,7 +661,7 @@ list(
   ),
   tar_target(
     viz_type_score_stats,
-    build_viz_type_score_stats(viz_scores_long, corpus_tcac20, min_pct = 0.5),
+    build_viz_type_score_stats(viz_scores_long, corpus, min_pct = 0.5),
     format = qs2_format()
   ),
   tar_target(
@@ -486,7 +676,7 @@ list(
   ),
   tar_target(
     viz_language_counts,
-    build_viz_language_counts(corpus_tcac20, min_pct = 0.5),
+    build_viz_language_counts(corpus, min_pct = 0.5),
     format = qs2_format()
   ),
   tar_target(
@@ -497,7 +687,7 @@ list(
   tar_target(
     viz_truncation_stats,
     build_viz_truncation_stats(
-      corpus_tcac20,
+      corpus,
       title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
       sep_token = emb_cfg$sep_token %||% "[SEP]"
     ),
@@ -506,7 +696,7 @@ list(
   tar_target(
     viz_keypaper_score_dist_data,
     build_viz_keypaper_score_dist_data(
-      scores_tcac20_title_abstract,
+      scores_title_abstract,
       key_works
     ),
     format = qs2_format()
@@ -519,9 +709,9 @@ list(
   tar_target(
     viz_emb_norm_data,
     build_viz_emb_norm_data(
-      emb_tcac20_title = emb_tcac20_title,
-      emb_tcac20_abstract = emb_tcac20_abstract,
-      emb_tcac20_title_abstract = emb_tcac20_title_abstract,
+      emb_corpus_title = emb_corpus_title,
+      emb_corpus_abstract = emb_corpus_abstract,
+      emb_corpus_title_abstract = emb_corpus_title_abstract,
       emb_keypapers_title = emb_keypapers_title,
       emb_keypapers_abstract = emb_keypapers_abstract,
       emb_keypapers_title_abstract = emb_keypapers_title_abstract
@@ -535,7 +725,7 @@ list(
   ),
   tar_target(
     viz_citation_score_data,
-    build_viz_citation_score_data(viz_scores_long, corpus_tcac20),
+    build_viz_citation_score_data(viz_scores_long, corpus),
     format = qs2_format()
   ),
   tar_target(
@@ -545,7 +735,7 @@ list(
   ),
   tar_target(
     viz_top_bottom,
-    viz_top_bottom_tables(viz_scores_long, corpus_tcac20),
+    viz_top_bottom_tables(viz_scores_long, corpus),
     format = qs2_format()
   ),
   tar_target(
@@ -566,7 +756,7 @@ list(
   tar_target(
     viz_umap_coords_df,
     viz_umap_coords(
-      emb_tcac20_title_abstract,
+      emb_corpus_title_abstract,
       emb_keypapers_title_abstract,
       viz_cfg = viz_cfg
     ),
@@ -576,17 +766,17 @@ list(
     viz_umap_join,
     viz_umap_data(
       umap_coords = viz_umap_coords_df,
-      emb_tcac20_title = emb_tcac20_title,
+      emb_corpus_title = emb_corpus_title,
       emb_keypapers_title = emb_keypapers_title,
-      scores_tcac20_title_abstract = scores_tcac20_title_abstract,
-      corpus_tcac20 = corpus_tcac20,
+      scores_title_abstract = scores_title_abstract,
+      corpus = corpus,
       key_works = key_works
     ),
     format = qs2_format()
   ),
   tar_target(
     viz_umap_bestkp,
-    viz_umap_best_kp(viz_umap_join, scores_tcac20_title_abstract),
+    viz_umap_best_kp(viz_umap_join, scores_title_abstract),
     format = qs2_format()
   ),
   tar_target(
@@ -617,7 +807,7 @@ list(
   ),
   tar_target(
     tbl_topics_data,
-    build_tbl_topics_data(topics_tcac20_runpod, emb_tcac20_title),
+    build_tbl_topics_data(topics_runpod, emb_corpus_title),
     format = qs2_format()
   ),
   tar_target(
@@ -628,7 +818,7 @@ list(
   tar_target(
     viz_topics_fig,
     build_viz_topics_fig(
-      topics_tcac20 = topics_tcac20_runpod,
+      topics = topics_runpod,
       emb_corpus = viz_umap_join$emb_corpus,
       emb_keypaper = viz_umap_kp
     ),
@@ -639,16 +829,16 @@ list(
   # the embeddings dataset, or the .qmd itself changes.
   tarchetypes::tar_quarto(
     report_embeddings,
-    path = "Reimaging TFC Embedding Report.qmd",
+    path = "NXS TCS Article Embedding Report.qmd",
     quiet = TRUE
   ),
 
   # Render the Topic Modelling Report. Re-builds whenever any of its tar_read()
-  # targets (search terms, count_st, yearly_counts, corpus_tcac20,
-  # key_works, assess_*_in_tca) or the .qmd itself changes.
+  # targets (corpus, key_works, topics_runpod, ...) or the
+  # .qmd itself changes.
   tarchetypes::tar_quarto(
     report_topic_modelling,
-    path = "Reimaging TFC Topic Modelling Report.qmd",
+    path = "NXS TCS Article Topic Modelling Report.qmd",
     quiet = TRUE
   ),
 
@@ -672,7 +862,7 @@ list(
       dest <- file.path(
         dirname(report_topic_modelling),
         paste0(
-          "Reimaging TFC Topic Modelling Report - ",
+          "NXS TCS Article Topic Modelling Report - ",
           bertopic_active_for_viz, ".html"
         )
       )

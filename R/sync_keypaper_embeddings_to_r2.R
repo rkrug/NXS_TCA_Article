@@ -6,7 +6,7 @@
 # read from there via duckdb httpfs (see its "Translate local emb dirs ->
 # s3:// URIs" step). Without this target, regenerating emb_keypapers_*
 # locally (e.g. after swapping the keypaper input file) has no effect on
-# what topics_tcac20_runpod actually scores against, since the pod only ever
+# what topics_runpod actually scores against, since the pod only ever
 # looks at R2 — it silently keeps reading whatever was last pushed there.
 #
 # Credentials are read fresh from the system keyring on every call (entries

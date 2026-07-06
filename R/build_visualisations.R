@@ -64,9 +64,9 @@ read_embeddings <- function(config_dir) {
 }
 
 read_scores_long <- function(
-  scores_tcac20_title,
-  scores_tcac20_abstract,
-  scores_tcac20_title_abstract
+  scores_title,
+  scores_abstract,
+  scores_title_abstract
 ) {
   # SLIM long form: one row per (id, variant) with max similarity across
   # all keypaper columns. Replaces the previous full wide->long pivot,
@@ -81,7 +81,7 @@ read_scores_long <- function(
   # Takes all three variant score paths explicitly (rather than scanning
   # the shared config directory for sibling files) so `targets` sees the
   # real dependency edges — otherwise nothing guarantees
-  # scores_tcac20_title/abstract are built before this target runs, and
+  # scores_title/abstract are built before this target runs, and
   # viz_agree_data (which needs all three variants) can silently see a
   # partial result.
   if (
@@ -91,9 +91,9 @@ read_scores_long <- function(
     stop("Packages 'duckdb' and 'DBI' are required for read_scores_long().")
   }
   files <- c(
-    scores_tcac20_title,
-    scores_tcac20_abstract,
-    scores_tcac20_title_abstract
+    scores_title,
+    scores_abstract,
+    scores_title_abstract
   )
 
   con <- DBI::dbConnect(duckdb::duckdb())
@@ -135,11 +135,11 @@ read_scores_long <- function(
 
 # ---- 1. Run-metadata table -------------------------------------------------
 
-viz_metadata_table <- function(emb_tcac20_title) {
+viz_metadata_table <- function(emb_corpus_title) {
   # Count via arrow pushdown — reads only parquet metadata, no rows
   # materialised. Used to take the full viz_embeddings tibble; that
   # path no longer scales.
-  config_dir <- dirname(dirname(emb_tcac20_title))
+  config_dir <- dirname(dirname(emb_corpus_title))
   arrow::open_dataset(config_dir) |>
     dplyr::count(source, variant) |>
     dplyr::collect() |>
@@ -258,7 +258,7 @@ build_viz_score_ecdf_fig <- function(
 
 # ---- 3. Top / bottom matches ----------------------------------------------
 
-viz_top_bottom_tables <- function(scores_long, corpus_tcac20, n = 10) {
+viz_top_bottom_tables <- function(scores_long, corpus, n = 10) {
   # scores_long is the slim per-id max form (id, variant, score). Pick
   # top/bottom-N per variant, then fetch title strings from corpus via
   # an arrow pushdown filter on the (small) id set. Avoids loading
@@ -276,7 +276,7 @@ viz_top_bottom_tables <- function(scores_long, corpus_tcac20, n = 10) {
     ) |>
     dplyr::ungroup()
 
-  titles <- arrow::open_dataset(corpus_tcac20) |>
+  titles <- arrow::open_dataset(corpus) |>
     dplyr::filter(id %in% picked$id) |>
     dplyr::select(id, title) |>
     dplyr::collect()
@@ -470,9 +470,9 @@ build_viz_threshold_fig <- function(
 # ~45-column x 4.6M-row file.
 
 build_viz_top_matches_per_kp_data <- function(
-  scores_tcac20_title_abstract,
+  scores_title_abstract,
   key_works,
-  corpus_tcac20,
+  corpus,
   n_matches = 1000L
 ) {
   if (
@@ -481,7 +481,7 @@ build_viz_top_matches_per_kp_data <- function(
   ) {
     stop("Packages 'duckdb' and 'DBI' are required.")
   }
-  f <- scores_tcac20_title_abstract
+  f <- scores_title_abstract
   if (!file.exists(f)) stop("Scores parquet not found: ", f)
 
   con <- DBI::dbConnect(duckdb::duckdb())
@@ -514,7 +514,7 @@ build_viz_top_matches_per_kp_data <- function(
     dplyr::collect() |>
     dplyr::rename(keypaper_id = id, keypaper_title = title)
 
-  corpus_meta <- arrow::open_dataset(corpus_tcac20) |>
+  corpus_meta <- arrow::open_dataset(corpus) |>
     dplyr::select(id, doi, title, citation) |>
     dplyr::filter(id %in% unique(matches$match_id)) |>
     dplyr::collect() |>
@@ -703,7 +703,7 @@ build_tbl_top_matches_per_kp_widget <- function(
 # materialize as text in R.
 
 build_viz_text_length_data <- function(
-  corpus_tcac20,
+  corpus,
   title_cap_combined = 200L,
   sep_token = "[SEP]",
   bins = 60L
@@ -732,7 +732,7 @@ build_viz_text_length_data <- function(
      WHERE title IS NOT NULL OR abstract IS NOT NULL",
     title_cap_combined,
     sep_len,
-    corpus_tcac20
+    corpus
   )
   df <- tibble::as_tibble(DBI::dbGetQuery(con, sql))
 
@@ -848,11 +848,11 @@ build_viz_keypaper_self_sim_fig <- function(
 
 build_viz_score_year_data <- function(
   scores_long,
-  corpus_tcac20,
+  corpus,
   year_min = 1990L,
   score_bins = 60L
 ) {
-  years <- arrow::open_dataset(corpus_tcac20) |>
+  years <- arrow::open_dataset(corpus) |>
     dplyr::select(id, publication_year) |>
     dplyr::collect()
 
@@ -945,8 +945,8 @@ build_viz_score_year_fig <- function(
 # score plots (too few works for a meaningful median/violin) but kept
 # in the count bar chart so the long tail is visible.
 
-build_viz_type_counts <- function(corpus_tcac20, min_pct = 0.5) {
-  arrow::open_dataset(corpus_tcac20) |>
+build_viz_type_counts <- function(corpus, min_pct = 0.5) {
+  arrow::open_dataset(corpus) |>
     dplyr::count(type) |>
     dplyr::collect() |>
     dplyr::mutate(
@@ -993,10 +993,10 @@ build_viz_type_count_fig <- function(
 
 build_viz_type_score_stats <- function(
   scores_long,
-  corpus_tcac20,
+  corpus,
   min_pct = 0.5
 ) {
-  types_df <- arrow::open_dataset(corpus_tcac20) |>
+  types_df <- arrow::open_dataset(corpus) |>
     dplyr::select(id, type) |>
     dplyr::collect() |>
     dplyr::mutate(type = ifelse(is.na(type) | type == "", "(unknown)", type))
@@ -1099,8 +1099,8 @@ build_viz_type_score_box_fig <- function(
 
 # ---- 5g. Language breakdown -----------------------------------------------
 
-build_viz_language_counts <- function(corpus_tcac20, min_pct = 0.5) {
-  arrow::open_dataset(corpus_tcac20) |>
+build_viz_language_counts <- function(corpus, min_pct = 0.5) {
+  arrow::open_dataset(corpus) |>
     dplyr::count(language) |>
     dplyr::collect() |>
     dplyr::mutate(
@@ -1152,7 +1152,7 @@ build_viz_language_fig <- function(
 # Count how many works in each variant exceed plausible thresholds.
 
 build_viz_truncation_stats <- function(
-  corpus_tcac20,
+  corpus,
   title_cap_combined = 200L,
   sep_token = "[SEP]"
 ) {
@@ -1173,14 +1173,14 @@ build_viz_truncation_stats <- function(
   q <- function(expr) {
     sprintf(
       "SELECT COUNT(*) AS n FROM read_parquet('%s') WHERE %s",
-      corpus_tcac20,
+      corpus,
       expr
     )
   }
   total <- as.integer(
     DBI::dbGetQuery(
       con,
-      sprintf("SELECT COUNT(*) AS n FROM read_parquet('%s')", corpus_tcac20)
+      sprintf("SELECT COUNT(*) AS n FROM read_parquet('%s')", corpus)
     )$n
   )
 
@@ -1235,7 +1235,7 @@ build_viz_truncation_stats <- function(
 # median to surface 'generic' vs 'orphan' keypapers.
 
 build_viz_keypaper_score_dist_data <- function(
-  scores_tcac20_title_abstract,
+  scores_title_abstract,
   key_works
 ) {
   if (
@@ -1244,7 +1244,7 @@ build_viz_keypaper_score_dist_data <- function(
   ) {
     stop("Packages 'duckdb' and 'DBI' required.")
   }
-  f <- scores_tcac20_title_abstract
+  f <- scores_title_abstract
   if (!file.exists(f)) {
     stop("Scores parquet not found: ", f)
   }
@@ -1287,11 +1287,12 @@ build_viz_keypaper_score_dist_data <- function(
   stats <- long |>
     tidyr::pivot_wider(names_from = stat, values_from = value)
 
-  # Lookup title + link for the keypaper
+  # Lookup title for the keypaper. key_works has no link column, so synthesise
+  # an (always-NA) one to keep the downstream href logic working.
   meta <- arrow::open_dataset(key_works) |>
-    dplyr::select(id, title, link) |>
+    dplyr::select(id, title) |>
     dplyr::collect() |>
-    dplyr::mutate(citation = title)
+    dplyr::mutate(citation = title, link = NA_character_)
 
   stats |>
     dplyr::left_join(meta, by = c("keypaper_id" = "id")) |>
@@ -1404,9 +1405,9 @@ build_viz_keypaper_score_dist_fig <- function(
 # histogram).
 
 build_viz_emb_norm_data <- function(
-  emb_tcac20_title,
-  emb_tcac20_abstract,
-  emb_tcac20_title_abstract,
+  emb_corpus_title,
+  emb_corpus_abstract,
+  emb_corpus_title_abstract,
   emb_keypapers_title,
   emb_keypapers_abstract,
   emb_keypapers_title_abstract,
@@ -1414,12 +1415,12 @@ build_viz_emb_norm_data <- function(
   seed = 13L
 ) {
   leaves <- list(
-    list(source = "corpus", variant = "title", path = emb_tcac20_title),
-    list(source = "corpus", variant = "abstract", path = emb_tcac20_abstract),
+    list(source = "corpus", variant = "title", path = emb_corpus_title),
+    list(source = "corpus", variant = "abstract", path = emb_corpus_abstract),
     list(
       source = "corpus",
       variant = "title_abstract",
-      path = emb_tcac20_title_abstract
+      path = emb_corpus_title_abstract
     ),
     list(source = "keypaper", variant = "title", path = emb_keypapers_title),
     list(
@@ -1474,11 +1475,11 @@ build_viz_emb_norm_fig <- function(norm_data, figures_dir = "output/figures") {
 
 build_viz_citation_score_data <- function(
   scores_long,
-  corpus_tcac20,
+  corpus,
   score_bins = 50L,
   citation_bins = 40L
 ) {
-  meta <- arrow::open_dataset(corpus_tcac20) |>
+  meta <- arrow::open_dataset(corpus) |>
     dplyr::select(id, cited_by_count) |>
     dplyr::collect()
   joined <- scores_long |>
@@ -1532,7 +1533,7 @@ build_viz_citation_score_fig <- function(
 # ---- 6. UMAP coords (used by both interactive UMAP and topics UMAP) --------
 
 viz_umap_coords <- function(
-  emb_tcac20_title_abstract,
+  emb_corpus_title_abstract,
   emb_keypapers_title_abstract,
   viz_cfg
 ) {
@@ -1561,7 +1562,7 @@ viz_umap_coords <- function(
     df
   }
   emb <- dplyr::bind_rows(
-    read_one(emb_tcac20_title_abstract, "corpus", sample_size),
+    read_one(emb_corpus_title_abstract, "corpus", sample_size),
     read_one(emb_keypapers_title_abstract, "keypaper", NULL)
   )
   vcols <- grep("^V[0-9]+$", names(emb), value = TRUE)
@@ -1586,10 +1587,10 @@ viz_umap_coords <- function(
 
 viz_umap_data <- function(
   umap_coords,
-  emb_tcac20_title,
+  emb_corpus_title,
   emb_keypapers_title,
-  scores_tcac20_title_abstract,
-  corpus_tcac20,
+  scores_title_abstract,
+  corpus,
   key_works,
   variant = "title_abstract"
 ) {
@@ -1601,7 +1602,7 @@ viz_umap_data <- function(
     dplyr::pull(id)
   variant_filter <- variant
   scored <- arrow::open_dataset(
-    file.path(scores_tcac20_title_abstract, "..", "..")
+    file.path(scores_title_abstract, "..", "..")
   ) |>
     dplyr::filter(variant == variant_filter, id %in% keep_ids) |>
     dplyr::collect()
@@ -1617,7 +1618,7 @@ viz_umap_data <- function(
   )
 
   title_per_id <- dplyr::bind_rows(
-    arrow::open_dataset(emb_tcac20_title) |>
+    arrow::open_dataset(emb_corpus_title) |>
       dplyr::select(id, title_clean) |>
       dplyr::collect(),
     arrow::open_dataset(emb_keypapers_title) |>
@@ -1627,7 +1628,7 @@ viz_umap_data <- function(
     dplyr::distinct(id, .keep_all = TRUE)
 
   citation_per_id <- dplyr::bind_rows(
-    arrow::open_dataset(corpus_tcac20) |>
+    arrow::open_dataset(corpus) |>
       dplyr::select(id, citation) |>
       dplyr::collect(),
     arrow::open_dataset(key_works) |>
@@ -1664,7 +1665,7 @@ viz_umap_data <- function(
 
 viz_umap_best_kp <- function(
   umap_data,
-  scores_tcac20_title_abstract,
+  scores_title_abstract,
   variant = "title_abstract"
 ) {
   # Restrict to the visible (sampled) corpus ids before collecting — the
@@ -1673,7 +1674,7 @@ viz_umap_best_kp <- function(
   visible_ids <- umap_data$emb_corpus$id
   variant_filter <- variant
   scores_v <- arrow::open_dataset(
-    file.path(scores_tcac20_title_abstract, "..", "..")
+    file.path(scores_title_abstract, "..", "..")
   ) |>
     dplyr::filter(variant == variant_filter, id %in% visible_ids) |>
     dplyr::collect()
@@ -1747,12 +1748,12 @@ build_viz_umap_fig <- function(
   sd_corpus <- crosstalk::SharedData$new(
     emb_corpus,
     key = ~id,
-    group = "tcac20_works"
+    group = "corpus_works"
   )
   sd_keypaper <- crosstalk::SharedData$new(
     emb_keypaper,
     key = ~id,
-    group = "tcac20_works"
+    group = "corpus_works"
   )
 
   # Restrict the JS lookup payloads to the rows actually rendered.
@@ -1789,7 +1790,7 @@ build_viz_umap_fig <- function(
       });
       var workMax = {};
       workMaxArr.forEach(function (r) { workMax[r.id] = r.work_max_sim; });
-      var handle = new crosstalk.SelectionHandle('tcac20_works');
+      var handle = new crosstalk.SelectionHandle('corpus_works');
       window.tcacSetCluster = function (kpId) {
         var cluster = kpToCorpus[kpId] || [];
         if (!cluster.length) { handle.clear(); Plotly.relayout(el, { shapes: [] }); return; }
@@ -1917,8 +1918,8 @@ build_viz_umap_fig <- function(
 
 # ---- 8. Topics ------------------------------------------------------------
 
-build_tbl_topics_data <- function(topics_tcac20, emb_tcac20_title) {
-  topics_dir <- dirname(topics_tcac20)
+build_tbl_topics_data <- function(topics, emb_corpus_title) {
+  topics_dir <- dirname(topics)
   topic_info <- arrow::read_parquet(file.path(topics_dir, "topic_info.parquet"))
   topics_df <- arrow::read_parquet(file.path(topics_dir, "topics.parquet"))
 
@@ -1928,7 +1929,7 @@ build_tbl_topics_data <- function(topics_tcac20, emb_tcac20_title) {
   # title variant is needed here, so we read it directly — keeps the
   # target buildable when the abstract variant isn't embedded yet.
   corpus_titles <- arrow::open_dataset(
-    emb_tcac20_title, # leaf_dir directly — embed_works
+    emb_corpus_title, # leaf_dir directly — embed_works
     # returns the directory, not a file.
     format = "parquet",
     factory_options = list(exclude_invalid_files = TRUE)
@@ -1983,12 +1984,12 @@ tbl_topics_widget <- function(topics_table_data, tables_dir = "output/tables") {
 }
 
 build_viz_topics_fig <- function(
-  topics_tcac20,
+  topics,
   emb_corpus,
   emb_keypaper,
   figures_dir = "output/figures"
 ) {
-  topics_dir <- dirname(topics_tcac20)
+  topics_dir <- dirname(topics)
   topics_df <- arrow::read_parquet(file.path(topics_dir, "topics.parquet"))
   corpus_topics <- topics_df |> dplyr::filter(source == "corpus")
 
@@ -2025,7 +2026,7 @@ build_viz_topics_fig <- function(
     function(el, x) {
       var idToTopic  = %s;
       var topicToIds = %s;
-      var handle = new crosstalk.SelectionHandle('tcac20_topics');
+      var handle = new crosstalk.SelectionHandle('corpus_topics');
       el.on('plotly_click', function (d) {
         var p = d.points[0];
         var id = p.customdata;
@@ -2045,12 +2046,12 @@ build_viz_topics_fig <- function(
   sd_corpus_topics <- crosstalk::SharedData$new(
     corpus_pts,
     key = ~id,
-    group = "tcac20_topics"
+    group = "corpus_topics"
   )
   sd_kp_topics <- crosstalk::SharedData$new(
     kp_pts,
     key = ~id,
-    group = "tcac20_topics"
+    group = "corpus_topics"
   )
 
   fig <- plotly::plot_ly(height = 600) |>

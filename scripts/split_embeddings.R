@@ -24,7 +24,7 @@ suppressPackageStartupMessages({
 # ---- knobs ---------------------------------------------------------------
 target_bytes_per_file <- 1e9 # ~1 GB / file
 row_group_size <- 50000 # row group size inside each file
-emb_root <- "input/embeddings/config=SPECTER2_runpod"  # fork: embeddings under input/
+emb_root <- "output/NXS_TCA_corpus/embeddings/config=SPECTER2_runpod"
 sources <- c("corpus") # keypapers are tiny; skip
 variants <- c("title", "title_abstract", "abstract")
 

@@ -11,6 +11,17 @@ Semantic versioning, loosely:
   new watchdog signal).
 - **PATCH** — bug fixes, dependency bumps, small entrypoint tweaks.
 
+## v0.1.2 — 2026-07-06
+
+- **tei_idle_watchdog.sh**: self-stop now calls the RunPod REST API
+  (`POST https://rest.runpod.io/v1/pods/<id>/stop` with
+  `Authorization: Bearer $RUNPOD_API_KEY`) instead of `runpodctl stop pod`.
+  The `runpodctl` path required a `runpodctl config` file the pod doesn't
+  have and failed with "Runpod config file not found" / HTTP 400, so idle
+  pods never actually stopped. The REST call needs only `RUNPOD_API_KEY`
+  (already in the pod-template env) and matches
+  `scripts/runpod/stop_pods.sh`. Watchdog-only patch.
+
 ## v0.1.1 — 2026-06-08
 
 - **Dockerfile**: fix the `org.opencontainers.image.source` label —

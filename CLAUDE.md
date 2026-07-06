@@ -4,50 +4,63 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**TCAC 2.0** (Transformative Change Assessment Corpus 2.0) is an
-R/Python data pipeline that builds and analyses a scientific literature
-corpus from the OpenAlex academic database. It extends TCAC 1.0 by:
+**NXS TCA Article** is an R/Python data pipeline that builds and analyses
+a scientific literature corpus from the OpenAlex academic database. It is
+a keypaper-swap fork of the upstream `TCAC 2.0` repo
+(`/Volumes/GitHub/TCAC 2.0/`), originally built to re-run the
+keypaper-dependent stages against a different keypaper set while reusing
+the upstream corpus unchanged. That "frozen corpus" premise has since been
+superseded (see Fork note below): this repo now builds its own corpus from
+two curated IPBES Zotero assessment groups instead.
 
-1. Searching OpenAlex with topic-specific search terms (transformative
-   change AND nature), filtering by publication type.
-2. Extracting full records from a local OpenAlex snapshot.
+1. Downloading curated reference lists from two IPBES Zotero assessment
+   groups (TCA, NXS) and matching each item to an OpenAlex work by DOI.
+2. Extracting full records for the matched works from a local OpenAlex
+   snapshot.
 3. Computing SPECTER2 embeddings per work and pairwise cosine
-   similarity against a curated keypaper set.
+   similarity against a curated set of TCA/Nexus concept definitions.
 4. Clustering the corpus with BERTopic (UMAP + HDBSCAN, RunPod GPU)
-   and projecting keypapers into the resulting topic space.
+   and projecting the definitions into the resulting topic space.
 
 The OpenAlex snapshot used is `RELEASE 2026-01-15`. All metadata is
 extracted from this local snapshot (not the live API) to ensure
-consistency between TCAC 1.0 and TCAC 2.0.
+consistent, reproducible corpus records.
 
-> **Fork note (`Reimagening_TFC`).** This repo is a keypaper-swap fork of
-> the upstream `TCAC 2.0` repo (`/Volumes/GitHub/TCAC 2.0/`). Its purpose
-> is to re-run the keypaper-dependent stages against a *different keypaper
-> set* while **reusing the upstream corpus and corpus embeddings unchanged**.
-> To that end the corpus + corpus-embeddings are treated as **static inputs**,
-> not pipeline outputs:
-> - `input/corpus/` and `input/embeddings/config=SPECTER2_runpod/source=corpus/`
->   are **APFS clones of the upstream artefacts, frozen read-only**. The
->   targets `corpus_tcac20` and `emb_tcac20_{title,abstract,title_abstract}`
->   are plain `format="file"` targets pointing at those paths — they never
->   recompute. `ids_tcac20`, `pilot_corpus_tcac20`, and the corpus call to
->   `get_corpus_from_snapshot()` were removed. (`embed_works()` /
->   `get_corpus_from_snapshot()` still carry read-only guards as a backstop.)
-> - `input/embeddings/config=SPECTER2_runpod/source=keypaper/` is **writable**
->   and stays **live**: `emb_keypapers_*` still run `embed_works(out_dir=
->   "input/embeddings")`, so a changed keypaper set is re-embedded. Corpus and
->   keypaper embeddings share one config dir, which `score_keypapers()`
->   requires. `output/TCAC_2.0/{scores,topics}/` are writable (regenerated).
-> - The R2 bucket is **`reimagine-tfc`** — a dedicated full copy (Cloudflare
->   Super Slurper) of upstream's `tcac-2-0` bucket, including both
->   `embeddings/` and the `intermediate/` BERTopic stage cache. Same account
->   /endpoint as upstream, different bucket, so there is no shared-prefix
->   collision: this fork can freely overwrite its own `source=keypaper`
->   objects as the keypaper set changes without touching upstream's data.
->   The BERTopic intermediate cache (keyed by `config=<name>/umap_cfg=<hash>/
->   hdbscan_cfg=<hash>/…`) was copied too, so cache hits are preserved for
->   unchanged UMAP/HDBSCAN params. `r2.embeddings_local_root` points at
->   `input/embeddings` so the RunPod path→s3 translation still resolves.
+> **Fork note.** This repo started as a keypaper-swap fork of the
+> upstream `TCAC 2.0` repo, reusing its corpus and corpus embeddings
+> unchanged as frozen, read-only static inputs. That premise has been
+> abandoned: this repo now **builds its own corpus** from two IPBES Zotero
+> assessment groups, so corpus and embeddings are live pipeline outputs
+> again, not frozen clones:
+> - **TCA** assessment Zotero group (id `4589462`, public) and **NXS**
+>   assessment literature Zotero group (id `4596166`, private — needs a
+>   Zotero API key with group access; see `zotero.api_key_keyring` in
+>   `input/config.yaml`) are downloaded via `download_zotero_assessment()`,
+>   matched to OpenAlex ids by DOI via `get_ids_from_dois()`, and extracted
+>   from the local snapshot via `get_corpus_from_snapshot()`. Each
+>   assessment lands in its own hive partition —
+>   `output/NXS_TCA_corpus/corpus/assessment={tca,nxs}/` — combined under
+>   one `corpus` dataset root.
+> - `output/NXS_TCA_corpus/embeddings/config=…/source={corpus,keypaper}/variant=…/`
+>   holds both corpus and keypaper embeddings, computed live by
+>   `embed_works()`. They must share one `config=` root —
+>   `score_keypapers()` requires it.
+> - The keypaper set (`key_works` target) now comes from
+>   `input/key papers/TCA and Nexus Definitions.csv` (a curated set of TCA/
+>   Nexus theory, framework, and methodology definitions, keyed by its own
+>   `ID` column) via `prepare_key_definitions()`, not the older
+>   `key_papers.csv` / `prepare_key_works()` path (left in place,
+>   unreferenced).
+> - The old frozen clones (`input/corpus/`,
+>   `input/embeddings/config=SPECTER2_runpod/source=corpus/`) and the
+>   search-term/types-filter/count/yearly-counts machinery (`tca_st`,
+>   `types_filter`, `count_st`, `yearly_counts`, and their backing
+>   `R/get_count.R` / `R/get_yearly_counts.R` / `R/assess_search_term.R`)
+>   are no longer referenced by `_targets.R` — the corpus is no longer a
+>   search-term-defined OpenAlex universe. Old files are left on disk,
+>   unreferenced.
+> - The R2 bucket is **`nxs-tca-article`**; `r2.embeddings_local_root`
+>   points at `output/NXS_TCA_corpus/embeddings`.
 > - **TCAC 1.0 has been removed** from this fork (comparison stage, inputs,
 >   `compare_corpora()`, and Corpus Report comparison sections).
 
@@ -59,51 +72,51 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
 
 ### Pipeline stages (each block invalidates independently)
 
-1. **Inputs** (`input/`) — search-term `.txt` files, keypapers `.rds`,
-   work-type filter `.csv`, OpenAlex snapshot dir.
-2. **Search-term assembly** — `tfc_st`, `nature_st`, `tca_st`
-   (combined as `(nature) AND (transformative change)`).
-3. **OpenAlex statistics** — `count_st` (hit counts per individual and
-   combined search), `yearly_counts` (publication-year buckets for the
-   universe + each search bucket).
-4. **Corpus** — `corpus_tcac20` is a **static input** (`input/corpus`,
-   a frozen clone of the upstream corpus; not re-extracted in this fork).
-6. **Embeddings** — `emb_tcac20_{title,abstract,title_abstract}` are
-   **static input** targets pointing at the frozen corpus-embedding clones
-   under `input/embeddings/config=…/source=corpus/variant=…/`.
-   `emb_keypapers_{…}` stay **live**: `embed_works()` (self-hosted TEI +
-   SPECTER2) writes them to `input/embeddings/…/source=keypaper/…`, so a
-   changed keypaper set is re-embedded. Corpus embeddings are mirrored to
-   Cloudflare R2 for the RunPod BERTopic dispatch (see
-   `scripts/runpod/sync_embeddings_to_r2.sh`).
-7. **Keypaper similarity** — `score_keypapers()` per variant, chunked
+1. **Inputs** (`input/`) — the TCA/Nexus Definitions `.csv` keypaper set,
+   OpenAlex snapshot dir, Zotero group ids (`input/config.yaml`).
+2. **Zotero download + OpenAlex matching** — `zotero_tca` / `zotero_nxs`
+   (`download_zotero_assessment()`, one per IPBES assessment group) →
+   `ids_tca` / `ids_nxs` (`get_ids_from_dois()`, DOI → OpenAlex id via the
+   live API).
+3. **Corpus** — `corpus_tca` / `corpus_nxs` (`get_corpus_from_snapshot()`,
+   full records from the local snapshot) land in their own hive partition
+   (`assessment=tca` / `assessment=nxs`); `corpus` is a thin target
+   combining both into one dataset root for downstream consumers.
+4. **Embeddings** — `emb_corpus_{title,abstract,title_abstract}` and
+   `emb_keypapers_{…}` are both **live** `embed_works()` (self-hosted TEI +
+   SPECTER2) targets writing to
+   `output/NXS_TCA_corpus/embeddings/config=…/source={corpus,keypaper}/variant=…/`
+   — they must share one `config=` root (`score_keypapers()` requires it).
+   Corpus embeddings are mirrored to Cloudflare R2 for the RunPod BERTopic
+   dispatch (see `scripts/runpod/sync_embeddings_to_r2.sh`).
+5. **Keypaper similarity** — `score_keypapers()` per variant, chunked
    per parquet file to avoid OOM. Output: `pairwise-cosine.parquet`
-   under `output/TCAC_2.0/scores/`.
-8. **Topic clustering** — Path B (`topics_tcac20_runpod`): cuml
+   under `output/NXS_TCA_corpus/scores/`.
+6. **Topic clustering** — Path B (`topics_runpod`): cuml
    UMAP+HDBSCAN on the full corpus, executed on a RunPod GPU pod via
    SSH + R2 (see `docker/bertopic-runpod/` + `R/run_bertopic_runpod.R`).
-   Path A (`topics_tcac20_local`) is a CPU subsample-fit fallback,
+   Path A (`topics_local`) is a CPU subsample-fit fallback,
    currently disabled in config.
-9. **Visualisation** — `viz_*_data` / `viz_*_fig` / `tbl_*` targets
+7. **Visualisation** — `viz_*_data` / `viz_*_fig` / `tbl_*` targets
    under `R/build_visualisations.R`. Score distributions, UMAP scatter,
    topic overlays, per-keypaper diagnostics. Most consumers read narrow
    slices via arrow pushdown rather than materialising the full corpus.
-10. **Reports** — Quarto reports rendered as `tar_quarto` targets:
-    - `report_embeddings` → `Reimaging TFC Embedding Report.qmd`
+8. **Reports** — Quarto reports rendered as `tar_quarto` targets:
+    - `report_embeddings` → `NXS TCS Article Embedding Report.qmd`
       (corpus stats, embedding quality, keypaper coherence).
-    - `report_topic_modelling` → `Reimaging TFC Topic Modelling Report.qmd`
+    - `report_topic_modelling` → `NXS TCS Article Topic Modelling Report.qmd`
       (BERTopic diagnostics, keypaper coverage per topic).
       `report_topic_modelling_named` then copies the rendered html to
-      `Reimaging TFC Topic Modelling Report - <active_for_viz>.html`, so
+      `NXS TCS Article Topic Modelling Report - <active_for_viz>.html`, so
       each `bertopic.active_for_viz` config keeps its own archived report
       instead of being overwritten when the config changes.
 
-    `Reimaging TFC Corpus Report.qmd` is no longer auto-rendered by the
-    pipeline (its `report_corpus` target was removed) — render it
-    manually with `quarto::quarto_render("Reimaging TFC Corpus Report.qmd")`
-    when needed. Its upstream targets (`count_st`, `yearly_counts`,
-    `corpus_tcac20`, `key_works`, etc.) are untouched and may still
-    feed other things.
+    `NXS TCS Article Corpus Report.qmd` is no longer auto-rendered by the
+    pipeline (its `report_corpus` target was removed) and is now stale —
+    it references the removed search-term targets (`count_st`,
+    `yearly_counts`, `assess_tfc`, `assess_nature`) and would need manual
+    rework before it could be rendered again with
+    `quarto::quarto_render("NXS TCS Article Corpus Report.qmd")`.
 
 ### Key external packages
 
@@ -115,48 +128,53 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
   similarity orchestration.
 - **`arrow`** — parquet I/O, hive-partitioned datasets.
 - **`duckdb`** — used inside `score_keypapers()` for streaming
-  computation and inside `get_yearly_counts()` for group-by-year.
-- **`keyring`** — stores the OpenAlex Pro API key; retrieved via
-  `keyring::key_get("API_openalex")`.
+  computation.
+- **`httr2`** / **`jsonlite`** — hand-rolled Zotero API client
+  (`download_zotero_assessment()`); no dedicated Zotero R package.
+- **`keyring`** — stores the OpenAlex Pro API key
+  (`keyring::key_get("API_openalex")`) and the Zotero API key for the
+  private NXS group (`zotero.api_key_keyring` in `input/config.yaml`,
+  currently `API_zotero_IPBES_spc_corpus`).
 - **`targets`** / **`tarchetypes`** — pipeline orchestration + Quarto
   render targets.
 - **`renv`** — package dependency management.
 
 ### Inputs (`input/`)
 
-- `input/config.yaml` — all pipeline parameters (active embedding
-  config, BERTopic configs, viz knobs).
-- `input/search terms/tfc_TCAC_2.0.txt` — transformative change
-  search term.
-- `input/search terms/nature_TCAC_2.0.txt` — nature search term.
-- `input/openalex_types.csv` — OpenAlex work types, with `Included`
-  column controlling the type filter.
-- `input/key papers/key_papers.csv` — **fork:** curated keypaper set —
-  a mix of academic papers and non-paper "concept" entries (case
-  studies, artistic projects, other examples), columns
-  title/abstract/link/type. `prepare_key_works()` converts this
-  directly into the standardized `id/title/abstract/link/type`
-  parquet (`key_works` target) that feeds `emb_keypapers_*` — no
-  OpenAlex DOI lookup in this path anymore (superseded
-  `get_key_works()` / `key_papers_TCAC_1.0.rds`, which only worked for
-  entries with a resolvable DOI).
-- `input/corpus/` — **fork:** frozen clone of the upstream TCAC 2.0
-  corpus (read-only; consumed as a static input, not in git).
-- `input/embeddings/config=…/source={corpus,keypaper}/variant=…/` —
-  **fork:** `source=corpus` is a frozen clone (read-only, static input);
-  `source=keypaper` is writable and regenerated by `emb_keypapers_*`.
-  Not in git.
+- `input/config.yaml` — all pipeline parameters (Zotero assessment group
+  ids, active embedding config, BERTopic configs, viz knobs).
+- `input/key papers/TCA and Nexus Definitions.csv` — curated set of TCA/
+  Nexus theory, framework, and methodology definitions, columns
+  `ID, Table code, Theory/framework/methodology, Literal definition,
+  Primary approach, Secondary approach`. `prepare_key_definitions()`
+  converts this into the standardized `id/title/abstract/link/
+  primary_approach/secondary_approach` parquet (`key_works` target) that
+  feeds `emb_keypapers_*`, keyed directly by the CSV's own `ID` column.
+  Supersedes `input/key papers/key_papers.csv` / `prepare_key_works.R`
+  (left in place, unreferenced).
 - `input/snapshot/` — local OpenAlex snapshot (large; not in git).
+- `input/corpus/`, `input/embeddings/config=SPECTER2_runpod/source=corpus/`
+  — old frozen clones from the original fork architecture, no longer
+  referenced by `_targets.R` (superseded by the live
+  `output/NXS_TCA_corpus/corpus/` / `.../embeddings/` targets below). Left
+  on disk, not deleted.
 
 ### Outputs (`output/`)
 
-- `output/keyworks/` — keypaper metadata (parquet/json/jsonl).
-- `output/TCAC_2.0/scores/` — pairwise-cosine parquets per variant.
-- `output/TCAC_2.0/topics/` — BERTopic outputs hive-partitioned
+- `output/NXS_TCA_corpus/zotero/assessment={tca,nxs}/` — raw Zotero item
+  metadata per assessment group.
+- `output/NXS_TCA_corpus/corpus/assessment={tca,nxs}/` — full OpenAlex
+  records extracted from the local snapshot, hive-partitioned by
+  assessment; `corpus` reads this whole root.
+- `output/NXS_TCA_corpus/embeddings/config=…/source={corpus,keypaper}/variant=…/`
+  — SPECTER2 embeddings for both the corpus and the keypaper set.
+- `output/NXS_TCA_corpus/keypaper/key_works.parquet` — standardized
+  keypaper set (see `prepare_key_definitions()` above).
+- `output/NXS_TCA_corpus/scores/` — pairwise-cosine parquets per variant.
+- `output/NXS_TCA_corpus/topics/` — BERTopic outputs hive-partitioned
   config / bertopic-name / variant.
 - `output/figures/` — static PNG figures (one per `viz_*_fig`).
 - `output/tables/` — table HTML widgets (`tbl_*`).
-- `output/search_strings/` — search-hit counts + yearly counts.
 
 ## Common Commands
 
@@ -186,14 +204,14 @@ make renv-snapshot
 Single target interactively:
 
 ```r
-targets::tar_make(names = "corpus_tcac20")
-targets::tar_load(corpus_tcac20)
+targets::tar_make(names = "corpus")
+targets::tar_load(corpus)
 ```
 
 Render a report directly (bypass tar_quarto):
 
 ```r
-quarto::quarto_render("Reimaging TFC Corpus Report.qmd")
+quarto::quarto_render("NXS TCS Article Corpus Report.qmd")
 ```
 
 ## Notes
@@ -204,8 +222,7 @@ quarto::quarto_render("Reimaging TFC Corpus Report.qmd")
 - `workers` parameter (default 8 in `input/config.yaml`) controls
   parallel API requests.
 - `_targets/` and most of `output/` are gitignored. Tracked outputs:
-  the rendered `*Report.html` files, the ID parquet under
-  `output/TCAC_2.0_ids/` (when populated), and `output/keyworks/parquet/`.
+  the rendered `*Report.html` files.
 - BERTopic Path B requires a running RunPod pod from
   `ghcr.io/rkrug/bertopic-runpod:v0.1.13`. See
   `docker/bertopic-runpod/README.md`.

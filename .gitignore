@@ -34,7 +34,7 @@ _freeze/
 *_files/
 *.html
 !README.html
-!Reimaging TFC *Report*.html
+!NXS TCS Article *Report*.html
 *.pdf
 *.docx
 *.pptx

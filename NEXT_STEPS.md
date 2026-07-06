@@ -79,15 +79,15 @@ reference input.
   - [ ] Tune `min_points`, `concavity` for the corpus-scale Path B
     output once the BERTopic fit is retuned.
   - [ ] Add the density+polygon figure to
-    [Reimaging TFC Embedding Report.qmd](Reimaging TFC Embedding Report.qmd) with
+    [NXS TCS Article Embedding Report.qmd](NXS TCS Article Embedding Report.qmd) with
     caption.
 
 - [ ] **Finalise the reports**.
   - [ ] Re-render
-    [Reimaging TFC Embedding Report.qmd](Reimaging TFC Embedding Report.qmd) with
+    [NXS TCS Article Embedding Report.qmd](NXS TCS Article Embedding Report.qmd) with
     the retuned Path B topics.
   - [ ] Re-render
-    [Reimaging TFC Corpus Report.qmd](Reimaging TFC Corpus Report.qmd)
+    [NXS TCS Article Corpus Report.qmd](NXS TCS Article Corpus Report.qmd)
     (TCAC 1.0 comparison removed in this fork).
   - [ ] Spot-check accessibility (alt text, contrast for the polygon
     layer).

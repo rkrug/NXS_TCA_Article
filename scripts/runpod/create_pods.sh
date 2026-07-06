@@ -8,7 +8,9 @@
 #
 #   POD_KIND=http (default) — an HTTP service exposed through RunPod's proxy
 #     (e.g. the TEI/SPECTER2 embedding server). Readiness = polling
-#     https://<pod-id>-<PORT>.proxy.runpod.net<HEALTH_PATH>. Prints a
+#     https://<pod-id>-<PORT>.proxy.runpod.net<HEALTH_PATH> until it returns
+#     HTTP 2xx — i.e. the service itself is serving, not merely the proxy
+#     answering with a "pod starting" 502. Only once ready does it print the
 #     ready-to-paste `host:` line for input/config.yaml's active embedding
 #     config.
 #
@@ -107,7 +109,10 @@ source "${CONFIG_FILE}"
 : "${POD_NAME_PREFIX:=runpod}"
 : "${IDLE_MIN:=5}"
 : "${POLL_SEC:=30}"
-: "${HEALTH_TIMEOUT_SEC:=300}"
+# Generous default: a cold embedding pod must pull a multi-GB (model-baked-in)
+# image and load the model before /health returns 2xx. Raise in pods.conf if
+# your image/cold-start is slower.
+: "${HEALTH_TIMEOUT_SEC:=900}"
 : "${HEALTH_POLL_INTERVAL_SEC:=10}"
 # Stagger pod-creation calls so N pods don't all start pulling the (multi-GB,
 # model-baked-in) image at the exact same instant — mitigates possible
@@ -224,6 +229,7 @@ echo "Waiting for each pod to become ready (timeout ${HEALTH_TIMEOUT_SEC}s each)
 
 declare -a PUB_HOSTS=()
 declare -a PUB_PORTS=()
+declare -a NOT_READY=()
 
 for idx in "${!POD_IDS[@]}"; do
   id="${POD_IDS[$idx]}"
@@ -236,7 +242,10 @@ for idx in "${!POD_IDS[@]}"; do
   if [[ "${POD_KIND}" == "http" ]]; then
     host="${POD_HOSTS[$idx]}"
     while [[ "${elapsed}" -lt "${HEALTH_TIMEOUT_SEC}" ]]; do
-      if curl -sS --max-time 10 "https://${host}${HEALTH_PATH}" >/dev/null 2>&1; then
+      # -f: treat HTTP >= 400 (e.g. the proxy's 502 while the container is
+      # still booting) as NOT ready, so we only succeed on a real 2xx from
+      # the service itself.
+      if curl -fsS --max-time 10 "https://${host}${HEALTH_PATH}" >/dev/null 2>&1; then
         ready=1
         break
       fi
@@ -274,6 +283,7 @@ for idx in "${!POD_IDS[@]}"; do
     else
       echo "  ${name}: public IP/port NOT assigned after ${HEALTH_TIMEOUT_SEC}s — check the RunPod console/logs" >&2
     fi
+    NOT_READY+=("${name}")
   fi
 done
 
@@ -282,6 +292,19 @@ for idx in "${!POD_IDS[@]}"; do
   echo "${POD_IDS[$idx]},${POD_NAMES[$idx]},${PUB_HOSTS[$idx]},${PUB_PORTS[$idx]}" >> "${OUT_CSV}"
 done
 echo "Wrote pod inventory to ${OUT_CSV}" >&2
+
+# Only emit connection info once every pod is actually up. If any timed out,
+# print no paste block (it would point at a not-yet-serving pod) and exit
+# non-zero — the inventory CSV is still written for teardown.
+if [[ "${#NOT_READY[@]}" -gt 0 ]]; then
+  echo "" >&2
+  echo "error: ${#NOT_READY[@]} pod(s) did not come up within ${HEALTH_TIMEOUT_SEC}s:" >&2
+  printf '  - %s\n' "${NOT_READY[@]}" >&2
+  echo "Not printing connection info. Check the RunPod console/logs; ids are in ${OUT_CSV}." >&2
+  echo "Raise HEALTH_TIMEOUT_SEC in pods.conf for a slower cold start, or stop with:" >&2
+  echo "  scripts/runpod/stop_pods.sh" >&2
+  exit 1
+fi
 
 echo "" >&2
 if [[ "${POD_KIND}" == "http" ]]; then

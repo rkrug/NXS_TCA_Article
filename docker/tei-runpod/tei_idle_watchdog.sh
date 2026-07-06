@@ -2,10 +2,10 @@
 # Self-stop the RunPod pod when TEI has been idle for IDLE_MIN minutes.
 #
 # Watches TEI's Prometheus metrics endpoint for the cumulative request
-# counter. If it stops moving for IDLE_MIN consecutive minutes, calls
-# `runpodctl stop pod $RUNPOD_POD_ID` to pause billing. The pod can be
-# restarted from the RunPod UI (or via API) — the network volume + image
-# cache survive.
+# counter. If it stops moving for IDLE_MIN consecutive minutes, it stops the
+# pod via the RunPod REST API (POST /v1/pods/<id>/stop) to pause billing. The
+# pod can be restarted from the RunPod UI (or via API) — the network volume +
+# image cache survive.
 #
 # Required env (set by the pod template):
 #   RUNPOD_POD_ID    Automatically set by RunPod.
@@ -26,8 +26,29 @@ if [ -z "${RUNPOD_POD_ID:-}" ]; then
 	exit 0
 fi
 if [ -z "${RUNPOD_API_KEY:-}" ]; then
-	echo "[idle-watchdog] RUNPOD_API_KEY not set — runpodctl stop will fail. Add it to the pod template env." >&2
+	echo "[idle-watchdog] RUNPOD_API_KEY not set — the self-stop REST call will be skipped. Add it to the pod template env." >&2
 fi
+
+# Stop the pod via the RunPod REST API — the same mechanism as
+# scripts/runpod/stop_pods.sh. This needs only RUNPOD_API_KEY in the env; it
+# does NOT use runpodctl (which requires a `runpodctl config` file the pod
+# doesn't have — that path failed with "Runpod config file not found"). The
+# call is guarded so a failure logs instead of killing the watchdog under
+# `set -e`.
+stop_pod() {
+	if [ -z "${RUNPOD_API_KEY:-}" ]; then
+		echo "[idle-watchdog] RUNPOD_API_KEY not set — cannot stop pod ${RUNPOD_POD_ID}" >&2
+		return 0
+	fi
+	code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+		"https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}/stop" \
+		-H "Authorization: Bearer ${RUNPOD_API_KEY}" 2>/dev/null || echo 000)"
+	if [ "${code}" -ge 200 ] && [ "${code}" -lt 300 ]; then
+		echo "[idle-watchdog] stop request accepted (HTTP ${code}) for pod ${RUNPOD_POD_ID}"
+	else
+		echo "[idle-watchdog] warning: stop request failed (HTTP ${code}) for pod ${RUNPOD_POD_ID}" >&2
+	fi
+}
 
 last_count=-1
 idle_seconds=0
@@ -55,7 +76,7 @@ while true; do
 
 	if [ "${idle_seconds}" -ge "$((IDLE_MIN * 60))" ]; then
 		echo "[idle-watchdog] idle threshold reached, stopping pod ${RUNPOD_POD_ID}"
-		runpodctl stop pod "${RUNPOD_POD_ID}"
+		stop_pod
 		exit 0
 	fi
 
