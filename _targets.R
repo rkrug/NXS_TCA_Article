@@ -657,19 +657,55 @@ list(
     format = qs2_format()
   ),
 
-  # ---- Embedding-report extras ---------------------------------------------
+  # ---- Chapter Analysis report (chapter <-> keypaper, from scores_combined) --
+  # Centrepiece: top matches per keypaper, stacked by assessment/chapter, from
+  # the per-chapter combined scores. Plus overall chapter-alignment + a
+  # chapter x keypaper heatmap. (Replaces the old flat viz_top_matches_per_kp /
+  # tbl_top_matches_per_kp, which had no chapter dimension.)
   tar_target(
-    viz_top_matches_per_kp,
-    build_viz_top_matches_per_kp_data(
-      scores_title_abstract = scores_title_abstract,
+    viz_top_matches_combined,
+    build_viz_top_matches_per_kp_combined_data(
+      scores_combined = scores_combined,
       key_works = key_works,
       corpus = corpus
     ),
     format = qs2_format()
   ),
   tar_target(
-    tbl_top_matches_per_kp,
-    build_tbl_top_matches_per_kp_widget(viz_top_matches_per_kp),
+    tbl_top_matches_combined,
+    build_tbl_top_matches_per_kp_combined_widget(viz_top_matches_combined),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_alignment_data,
+    build_viz_chapter_alignment_data(scores_combined),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_alignment_fig,
+    build_viz_chapter_alignment_fig(viz_chapter_alignment_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_keypaper_heatmap_data,
+    build_viz_chapter_keypaper_heatmap_data(scores_combined, key_works),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_keypaper_heatmap_fig,
+    build_viz_chapter_keypaper_heatmap_fig(viz_chapter_keypaper_heatmap_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_cliffs_delta_data,
+    build_viz_chapter_cliffs_delta_data(scores_combined),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_cliffs_delta_fig,
+    build_viz_chapter_cliffs_delta_fig(
+      viz_chapter_cliffs_delta_data, viz_chapter_alignment_data
+    ),
     format = qs2_format()
   ),
   tar_target(
@@ -905,6 +941,16 @@ list(
     quiet = TRUE
   ),
 
+  # Render the Chapter Analysis Report (chapter <-> keypaper similarity).
+  tarchetypes::tar_quarto(
+    report_analysis_render,
+    path = "NXS TCS Article Chapter Analysis Report.qmd",
+    output_file = paste0(
+      "NXS TCS Article Chapter Analysis Report - ", emb_name, ".html"
+    ),
+    quiet = TRUE
+  ),
+
   # Sync the rendered reports into output/reports/. Each report's filename
   # already carries its config name (baked into output_file above via
   # emb_name / bertopic_viz_name), so switching the active config produces a
@@ -939,6 +985,25 @@ list(
         stop("Expected exactly one rendered .html among ",
              "report_topic_modelling_render's tracked files, got: ",
              paste(report_topic_modelling_render, collapse = ", "))
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
+      dest
+    },
+    format = "file"
+  ),
+  tar_target(
+    report_analysis,
+    {
+      src <- report_analysis_render[grepl("\\.html$", report_analysis_render)]
+      if (length(src) != 1) {
+        stop("Expected exactly one rendered .html among ",
+             "report_analysis_render's tracked files, got: ",
+             paste(report_analysis_render, collapse = ", "))
       }
       dest_dir <- "output/reports"
       dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)

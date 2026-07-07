@@ -1,0 +1,106 @@
+---
+title: "NXS TCS Article — Chapter Analysis"
+subtitle: "How close are the assessment chapters to the keypaper concepts?"
+author:
+  - name:
+      family: Krug
+      given: Rainer M.
+    id: rmk
+    orcid: 0000-0002-7490-0066
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 9
+    fig-height: 5
+    grid:
+        sidebar-width: 0px
+        body-width: 4000px
+        margin-width: 200px
+        gutter-width: 1.5rem
+execute:
+  message: false
+  warning: false
+  cache: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(targets)
+```
+
+This report measures **how similar the papers in each assessment chapter are to
+the keypaper concepts** (the TCA/Nexus definitions). It is driven by the
+combined per-chapter scores (`scores_combined`): each corpus work scored from
+its `title_abstract` embedding, or its `title` embedding where it has no
+abstract, against the keypaper set — one row per `(work, assessment, chapter)`.
+
+A work tagged with several Zotero chapters is counted **once per chapter**
+(honest for "which chapters supply the matches"). Chapter labels are shown as
+tagged, except the malformed NXS tag `Chapter(s) 5`, relabelled to `Chapter 5`;
+the `Chapter 5.0…5.6` sub-chapters are kept separate.
+
+# Overall: which chapters are closest to the keypapers?
+
+Median (with inter-quartile bar) of each work's maximum cosine similarity to
+its nearest keypaper, per assessment/chapter. Higher = the chapter's papers sit
+closer to the keypaper concepts overall.
+
+```{r}
+#| label: fig-chapter-alignment
+#| fig-cap: "Chapter alignment to the keypaper set: median (bar) and bootstrap 95% CI of the median (error bar) of per-work max cosine similarity to the nearest keypaper, per assessment/chapter, sorted ascending. Chapters whose CIs do not overlap are really different; small-n chapters get wide CIs. n = works × chapter memberships in that chapter."
+#| fig-height: 8
+tar_read(viz_chapter_alignment_fig)
+```
+
+## Which chapters are *really* different? (Cliff's δ)
+
+Raw cosine gaps are hard to read on the compressed similarity scale, and with
+thousands of works trivial gaps look "significant". Cliff's δ is an effect
+size: for a pair of chapters it is P(a row-chapter work scores higher) −
+P(it scores lower). **0 ≈ indistinguishable**; |δ| ≈ 0.15 / 0.33 / 0.47 is a
+small / medium / large separation. Read a row against the columns: red = the
+row chapter's papers tend to score *higher* than the column's, blue = lower.
+
+```{r}
+#| label: fig-chapter-cliffs-delta
+#| fig-cap: "Pairwise Cliff's δ between assessment/chapters on per-work max keypaper similarity. Rows/columns ordered by median alignment (highest first). δ near 0 (white) = the two chapters' similarity distributions are indistinguishable."
+#| fig-height: 9
+tar_read(viz_chapter_cliffs_delta_fig)
+```
+
+# In detail: chapter × keypaper
+
+Median similarity of each assessment/chapter to each **individual** keypaper.
+Bright cells = the chapter's papers are close to that concept; dark rows =
+concepts the corpus has little near (orphans); a chapter's brightest cells are
+the concepts it most aligns with. Rows (keypapers) and columns (chapters) are
+ordered by overall median.
+
+```{r}
+#| label: fig-chapter-keypaper-heatmap
+#| fig-cap: "Median cosine similarity per (assessment/chapter, keypaper). Rows = keypaper concepts, columns = assessment/chapter."
+#| fig-height: 12
+tar_read(viz_chapter_keypaper_heatmap_fig)
+```
+
+# Top matches per keypaper, by chapter
+
+Pick a keypaper concept to browse its highest-scoring corpus matches. The
+histogram stacks the matches' similarity by **assessment/chapter**, so you can
+see which chapters supply a concept's closest papers. **Toggle chapters in the
+legend** (click to show/hide, double-click to isolate); `No Chapter` works are
+**hidden by default** — click their legend entry to include them. The table
+below carries `assessment` and `chapter` columns (filterable), and the CSV
+button exports the currently filtered rows. Links go to the DOI when available,
+otherwise the OpenAlex page.
+
+```{r}
+#| label: tbl-top-matches-combined
+tar_read(tbl_top_matches_combined)
+```

@@ -710,6 +710,509 @@ build_tbl_top_matches_per_kp_widget <- function(
   w
 }
 
+# ---- 5b-bis. Chapter-aware keypaper analysis (scores_combined) -------------
+# The Chapter Analysis report uses the combined per-chapter scores
+# (scores_combined: config/assessment/chapter, one row per (work, chapter)) to
+# ask how close each assessment/chapter is to the keypapers.
+
+# Display-only chapter relabelling. Collapses the fragmented NXS chapter-5
+# tags into a single `Chapter 5`: `Chapter 5`, `Chapter 5.0`…`Chapter 5.n`, and
+# the malformed `Chapter(s) 5` all map to `Chapter 5`. Assessment-agnostic
+# (only NXS has the 5.x / (s) variants; TCA's `Chapter 5` is already exactly
+# that, and aggregation is by assessment+chapter so the two stay separate).
+# NOT a source fix — the corpus/embeddings/topics partitions are unchanged.
+normalize_chapter_label <- function(x) {
+  x <- ifelse(x == "Chapter(s) 5", "Chapter 5", x)
+  ifelse(grepl("^Chapter 5(\\.[0-9]+)?$", x), "Chapter 5", x)
+}
+
+# Bootstrap percentile CI of the median — for the chapter-alignment chart.
+# Non-overlapping CIs across chapters ≈ a real difference; tiny-n chapters get
+# wide CIs (so they can't be ranked confidently against the big ones).
+.boot_median_ci <- function(x, B = 2000L, probs = c(0.025, 0.975)) {
+  x <- x[is.finite(x)]
+  n <- length(x)
+  if (n < 2L) return(c(lo = NA_real_, hi = NA_real_))
+  meds <- replicate(B, stats::median(sample(x, n, replace = TRUE)))
+  q <- stats::quantile(meds, probs, names = FALSE, na.rm = TRUE)
+  c(lo = q[[1]], hi = q[[2]])
+}
+
+# Cliff's delta = P(a > b) − P(a < b) in [−1, 1]; rank-based (ties via average
+# ranks). Effect size for "how different are two chapters' similarity
+# distributions": 0 = indistinguishable; |d| ≈ 0.15 / 0.33 / 0.47 =
+# small / medium / large (Romano et al. 2006).
+.cliffs_delta <- function(a, b) {
+  a <- a[is.finite(a)]; b <- b[is.finite(b)]
+  na <- length(a); nb <- length(b)
+  if (na == 0L || nb == 0L) return(NA_real_)
+  r  <- rank(c(a, b))
+  Ua <- sum(r[seq_len(na)]) - na * (na + 1) / 2
+  2 * Ua / (na * nb) - 1
+}
+
+# Like build_viz_top_matches_per_kp_data() but reads scores_combined so each
+# top-N match carries its assessment + chapter. Rows are per (work, chapter):
+# a multi-chapter work is ranked once per chapter (intended — that is what lets
+# the stacked chart attribute matches to chapters), so NO id-dedup here.
+build_viz_top_matches_per_kp_combined_data <- function(
+  scores_combined,   # path to the scores_combined config= root dir
+  key_works,
+  corpus,
+  n_matches = 1000L
+) {
+  if (
+    !requireNamespace("duckdb", quietly = TRUE) ||
+      !requireNamespace("DBI", quietly = TRUE)
+  ) {
+    stop("Packages 'duckdb' and 'DBI' are required.")
+  }
+  glob <- file.path(scores_combined, "**", "*.parquet")
+
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
+
+  cols <- names(DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM read_parquet('%s', hive_partitioning = true) LIMIT 0", glob
+  )))
+  # Exclude id + all hive-partition columns. duckdb parses the whole path, so
+  # `config` (from the scores_combined/config=… root) is a partition column
+  # here alongside assessment/chapter — must not be mistaken for a keypaper.
+  kp_cols <- setdiff(cols, c("id", "assessment", "chapter", "config"))
+  if (!length(kp_cols)) {
+    stop("No keypaper score columns found in scores_combined at ", scores_combined)
+  }
+
+  parts <- lapply(kp_cols, function(kp) {
+    sql <- sprintf(
+      'SELECT id AS match_id, assessment, chapter, "%s" AS similarity
+         FROM read_parquet(\'%s\', hive_partitioning = true)
+        WHERE "%s" IS NOT NULL
+        ORDER BY similarity DESC
+        LIMIT %d',
+      kp, glob, kp, n_matches
+    )
+    d <- DBI::dbGetQuery(con, sql)
+    d$keypaper_id <- kp
+    d$rank <- seq_len(nrow(d))
+    d
+  })
+  matches <- dplyr::bind_rows(parts)
+
+  kp_meta <- arrow::open_dataset(key_works) |>
+    dplyr::select(id, title) |>
+    dplyr::collect() |>
+    dplyr::rename(keypaper_id = id, keypaper_title = title)
+
+  corpus_meta <- arrow::open_dataset(corpus) |>
+    dplyr::select(id, doi, title, citation) |>
+    dplyr::filter(id %in% unique(matches$match_id)) |>
+    dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE) |>   # corpus repeats ids across chapters
+    dplyr::rename(
+      match_id = id, match_doi = doi,
+      match_title = title, match_citation = citation
+    )
+
+  matches |>
+    dplyr::left_join(kp_meta, by = "keypaper_id") |>
+    dplyr::left_join(corpus_meta, by = "match_id") |>
+    dplyr::mutate(
+      chapter       = normalize_chapter_label(chapter),
+      chapter_combo = paste0(assessment, " / ", chapter),
+      match_link    = dplyr::coalesce(match_doi, match_id)
+    ) |>
+    dplyr::select(
+      keypaper_id, keypaper_title, rank, assessment, chapter, chapter_combo,
+      match_link, match_citation, match_title, similarity
+    ) |>
+    dplyr::arrange(keypaper_title, rank)
+}
+
+# Interactive widget for the Chapter Analysis report: crosstalk keypaper
+# dropdown + a similarity histogram STACKED by assessment/chapter + a DT table
+# with assessment/chapter columns. Chapters are selected via the plotly legend
+# (click to show/hide, double-click to isolate); the "No Chapter" traces start
+# hidden (legendonly) — the default-off requested, but still one click away.
+# (Legend rather than a crosstalk checkbox because crosstalk filter widgets
+# can't default to "all-except-one".)
+build_tbl_top_matches_per_kp_combined_widget <- function(
+  top_matches_per_kp_combined,
+  tables_dir = "output/tables"
+) {
+  if (
+    !requireNamespace("crosstalk", quietly = TRUE) ||
+      !requireNamespace("DT", quietly = TRUE) ||
+      !requireNamespace("plotly", quietly = TRUE)
+  ) {
+    stop("Packages 'crosstalk', 'DT', and 'plotly' are required.")
+  }
+
+  df <- top_matches_per_kp_combined |>
+    dplyr::transmute(
+      keypaper_label = keypaper_title,
+      keypaper = keypaper_id,
+      rank,
+      assessment,
+      chapter,
+      chapter_combo,
+      link = sprintf(
+        '<a href="%s" target="_blank" rel="noopener">%s</a>',
+        match_link,
+        htmltools::htmlEscape(match_link)
+      ),
+      citation = match_citation,
+      title = match_title,
+      similarity = round(similarity, 4)
+    )
+
+  # Order combos so all tca segments are contiguous and all nxs contiguous in
+  # the stack (the "assessment / chapter" prefix makes a plain sort group by
+  # assessment); the per-segment border added below then outlines each
+  # assessment as a block.
+  df$chapter_combo <- factor(
+    df$chapter_combo, levels = sort(unique(df$chapter_combo))
+  )
+
+  sd <- crosstalk::SharedData$new(df, group = "tbl_top_matches_combined")
+
+  sim_rng <- range(df$similarity, na.rm = TRUE)
+  n_bins <- 40L
+  bin_width <- diff(sim_rng) / n_bins
+  breaks <- seq(sim_rng[1], sim_rng[2], length.out = n_bins + 1L)
+
+  # Reference: overall (all keypapers, all chapters) density line. Own widget,
+  # no SharedData, so crosstalk filtering never hides it. See the sibling
+  # build_tbl_top_matches_per_kp_widget() for the rationale.
+  all_dist <- df |>
+    dplyr::mutate(
+      bin = cut(similarity, breaks, include.lowest = TRUE, labels = FALSE)
+    ) |>
+    dplyr::count(bin) |>
+    dplyr::mutate(
+      x_mid = (breaks[bin] + breaks[bin + 1L]) / 2,
+      density = n / sum(n)
+    )
+  p_all <- plotly::plot_ly(
+    all_dist, x = ~x_mid, y = ~density, height = 110,
+    type = "scatter", mode = "lines",
+    line = list(color = "red", width = 1.5, shape = "spline"),
+    name = "all keypapers"
+  ) |>
+    plotly::layout(
+      xaxis = list(title = "", range = sim_rng),
+      yaxis = list(title = "all (density)"),
+      margin = list(t = 10, b = 10),
+      showlegend = FALSE
+    )
+
+  # Selected keypaper: match counts per similarity bin, STACKED by
+  # assessment/chapter. One trace per combo (legend = chapter selector).
+  # Explicit palette sized to the number of combos — the default (Set2, 8
+  # colours) would recycle across the ~20 assessment/chapter combos.
+  combo_cols <- grDevices::hcl.colors(
+    max(dplyr::n_distinct(df$chapter_combo), 3L), "Dark 3"
+  )
+  p_kp <- plotly::plot_ly(height = 320) |>
+    plotly::add_histogram(
+      data = sd, x = ~similarity, color = ~chapter_combo, colors = combo_cols,
+      xbins = list(start = sim_rng[1], end = sim_rng[2], size = bin_width)
+    ) |>
+    plotly::layout(
+      barmode = "stack",
+      xaxis = list(title = "similarity", range = sim_rng),
+      yaxis = list(title = "matches"),
+      bargap = 0.05,
+      margin = list(t = 10),
+      showlegend = TRUE,
+      legend = list(
+        title = list(text = "assessment / chapter"),
+        font = list(size = 10)
+      )
+    ) |>
+    # Disable crosstalk *selection* on the histogram entirely (on = NULL): only
+    # the keypaper dropdown (a crosstalk *filter*) and the legend (chapter
+    # show/hide) should be interactive. Without this, clicking/box-selecting a
+    # bar triggers crosstalk selection, which plotly renders by overlaying an
+    # extra highlighted trace ON TOP of the stack (and dimming the rest) — not
+    # what we want. The dropdown filter is independent of highlight() and keeps
+    # working.
+    plotly::highlight(on = NULL, off = NULL)
+  # Post-build per-trace tweaks: (1) default the "No Chapter" combos to
+  # legendonly (hidden until clicked); (2) outline each segment by assessment
+  # so the tca block and nxs block are visually bordered — tca = black,
+  # nxs = white (both read clearly against the categorical fills).
+  p_kp <- plotly::plotly_build(p_kp)
+  for (i in seq_along(p_kp$x$data)) {
+    nm <- p_kp$x$data[[i]]$name
+    if (is.null(nm)) next
+    if (grepl("No Chapter", nm, fixed = TRUE)) {
+      p_kp$x$data[[i]]$visible <- "legendonly"
+    }
+    border <- if (startsWith(nm, "tca")) {
+      "black"
+    } else if (startsWith(nm, "nxs")) {
+      "white"
+    } else {
+      "grey50"
+    }
+    p_kp$x$data[[i]]$marker$line <- list(color = border, width = 0.5)
+  }
+
+  hist <- htmltools::tagList(p_all, p_kp)
+
+  w <- crosstalk::bscols(
+    widths = c(3, 9),
+    list(
+      htmltools::tagList(
+        htmltools::tags$style(
+          ".tbl-top-matches-kp-select .selectize-input,
+           .tbl-top-matches-kp-select .selectize-dropdown { font-size: 12px; }"
+        ),
+        htmltools::div(
+          class = "tbl-top-matches-kp-select",
+          crosstalk::filter_select(
+            "kp_select_combined", "Keypaper", sd, ~keypaper_label,
+            multiple = FALSE
+          )
+        )
+      )
+    ),
+    list(
+      hist,
+      htmltools::tagList(
+        htmltools::tags$style(
+          ".tbl-top-matches-combined table.dataTable { font-size: 12px; }
+           .tbl-top-matches-combined .dt-buttons .dt-button { font-size: 12px; }"
+        ),
+        htmltools::div(
+          class = "tbl-top-matches-combined",
+          DT::datatable(
+            sd,
+            rownames = FALSE,
+            escape = FALSE,
+            filter = "top",
+            class = "compact stripe hover",
+            extensions = "Buttons",
+            options = list(
+              pageLength = 25,
+              order = list(list(2, "asc")),
+              # hide keypaper_label (0) + chapter_combo (5); keep assessment (3)
+              # + chapter (4) visible/filterable.
+              columnDefs = list(list(visible = FALSE, targets = c(0, 5))),
+              dom = "Bfrtip",
+              buttons = list("csv")
+            ),
+            caption = paste0(
+              "Top ", format(max(top_matches_per_kp_combined$rank), big.mark = ","),
+              " corpus matches per keypaper (title_abstract + title fallback, ",
+              "scores_combined). Pick a keypaper; the histogram stacks matches ",
+              "by assessment/chapter (toggle chapters in the legend; No Chapter ",
+              "is hidden by default). A work tagged with several chapters is ",
+              "counted once per chapter. CSV exports the filtered rows."
+            )
+          )
+        )
+      )
+    )
+  )
+  ensure_figures_dir(tables_dir)
+  save_html_path <- file.path(tables_dir, "tbl_top_matches_combined.html")
+  htmltools::save_html(w, save_html_path)
+  w
+}
+
+# ---- 5b-ter. Overall chapter alignment + chapter x keypaper heatmap --------
+
+# Per (assessment, chapter): distribution of each work's MAX cosine similarity
+# to any keypaper. Reads scores_combined via arrow (small — works x chapters).
+build_viz_chapter_alignment_data <- function(scores_combined) {
+  ds <- arrow::open_dataset(
+    scores_combined, factory_options = list(exclude_invalid_files = TRUE)
+  )
+  kp_cols <- setdiff(names(ds), c("id", "assessment", "chapter", "config"))
+  df <- ds |>
+    dplyr::select(dplyr::all_of(c("assessment", "chapter", kp_cols))) |>
+    dplyr::collect()
+  m <- as.matrix(df[, kp_cols, drop = FALSE])
+  df$max_sim <- apply(m, 1L, max, na.rm = TRUE)
+  set.seed(13)   # reproducible bootstrap CIs
+  df |>
+    dplyr::mutate(chapter = normalize_chapter_label(chapter)) |>
+    dplyr::group_by(assessment, chapter) |>
+    dplyr::group_modify(~{
+      ci <- .boot_median_ci(.x$max_sim)
+      tibble::tibble(
+        n      = nrow(.x),
+        median = stats::median(.x$max_sim, na.rm = TRUE),
+        q25    = stats::quantile(.x$max_sim, 0.25, na.rm = TRUE, names = FALSE),
+        q75    = stats::quantile(.x$max_sim, 0.75, na.rm = TRUE, names = FALSE),
+        ci_lo  = ci[["lo"]],
+        ci_hi  = ci[["hi"]]
+      )
+    }) |>
+    dplyr::ungroup()
+}
+
+build_viz_chapter_alignment_fig <- function(
+  chapter_alignment,
+  figures_dir = "output/figures"
+) {
+  d <- chapter_alignment |>
+    dplyr::mutate(lbl = paste0(assessment, " / ", chapter)) |>
+    dplyr::arrange(median) |>
+    dplyr::mutate(lbl = factor(lbl, levels = lbl))
+  p <- ggplot2::ggplot(
+    d, ggplot2::aes(x = median, y = lbl, fill = assessment)
+  ) +
+    ggplot2::geom_col() +
+    ggplot2::geom_errorbarh(
+      ggplot2::aes(xmin = ci_lo, xmax = ci_hi), height = 0.3, colour = "grey20"
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("%.3f (n=%s)", median, format(n, big.mark = ","))),
+      hjust = -0.05, size = 3
+    ) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.18))) +
+    ggplot2::labs(
+      x = "Median max cosine similarity to nearest keypaper (bootstrap 95% CI bar)",
+      y = NULL, fill = "Assessment",
+      title = "Chapter alignment to the keypaper set",
+      subtitle = "Bar = median; error bar = bootstrap 95% CI of the median. Non-overlapping CIs ≈ a real difference."
+    ) +
+    ggplot2::theme_minimal(base_size = 11)
+  save_ggplot_png(p, "chapter_alignment", figures_dir, width = 9, height = 8)
+  p
+}
+
+# Median similarity of each (assessment, chapter) to each individual keypaper.
+build_viz_chapter_keypaper_heatmap_data <- function(scores_combined, key_works) {
+  ds <- arrow::open_dataset(
+    scores_combined, factory_options = list(exclude_invalid_files = TRUE)
+  )
+  kp_cols <- setdiff(names(ds), c("id", "assessment", "chapter", "config"))
+  long <- ds |>
+    dplyr::select(dplyr::all_of(c("assessment", "chapter", kp_cols))) |>
+    dplyr::collect() |>
+    dplyr::mutate(chapter = normalize_chapter_label(chapter)) |>
+    tidyr::pivot_longer(
+      dplyr::all_of(kp_cols), names_to = "keypaper_id", values_to = "similarity"
+    ) |>
+    dplyr::summarise(
+      median = stats::median(similarity, na.rm = TRUE),
+      .by = c(assessment, chapter, keypaper_id)
+    )
+  kp_meta <- arrow::open_dataset(key_works) |>
+    dplyr::select(id, title) |>
+    dplyr::collect() |>
+    dplyr::rename(keypaper_id = id, keypaper_title = title)
+  long |> dplyr::left_join(kp_meta, by = "keypaper_id")
+}
+
+build_viz_chapter_keypaper_heatmap_fig <- function(
+  chapter_keypaper_heatmap,
+  figures_dir = "output/figures"
+) {
+  d <- chapter_keypaper_heatmap |>
+    dplyr::mutate(
+      col_lbl = paste0(assessment, " / ", chapter),
+      kp_lbl  = ifelse(is.na(keypaper_title) | keypaper_title == "",
+                       keypaper_id, keypaper_title)
+    )
+  kp_order <- d |>
+    dplyr::summarise(m = stats::median(median), .by = kp_lbl) |>
+    dplyr::arrange(m) |> dplyr::pull(kp_lbl)
+  col_order <- d |>
+    dplyr::summarise(m = stats::median(median), .by = col_lbl) |>
+    dplyr::arrange(dplyr::desc(m)) |> dplyr::pull(col_lbl)
+  d <- d |>
+    dplyr::mutate(
+      kp_lbl  = factor(kp_lbl, levels = kp_order),
+      col_lbl = factor(col_lbl, levels = col_order)
+    )
+  p <- ggplot2::ggplot(
+    d, ggplot2::aes(x = col_lbl, y = kp_lbl, fill = median)
+  ) +
+    ggplot2::geom_tile() +
+    ggplot2::scale_fill_viridis_c(name = "Median\nsimilarity") +
+    ggplot2::labs(
+      x = "assessment / chapter", y = "keypaper",
+      title = "Chapter × keypaper median similarity"
+    ) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      panel.grid = ggplot2::element_blank()
+    )
+  save_ggplot_png(p, "chapter_keypaper_heatmap", figures_dir,
+                  width = 11, height = 12)
+  p
+}
+
+# Pairwise Cliff's delta between every pair of assessment/chapter groups, on
+# each work's max cosine similarity to the nearest keypaper. Tells you which
+# chapters are *really* different (effect size, robust to the compressed
+# cosine scale and to large n making trivial gaps "significant").
+build_viz_chapter_cliffs_delta_data <- function(scores_combined) {
+  ds <- arrow::open_dataset(
+    scores_combined, factory_options = list(exclude_invalid_files = TRUE)
+  )
+  kp_cols <- setdiff(names(ds), c("id", "assessment", "chapter", "config"))
+  df <- ds |>
+    dplyr::select(dplyr::all_of(c("assessment", "chapter", kp_cols))) |>
+    dplyr::collect()
+  m <- as.matrix(df[, kp_cols, drop = FALSE])
+  df$max_sim <- apply(m, 1L, max, na.rm = TRUE)
+  df$grp <- paste0(df$assessment, " / ", normalize_chapter_label(df$chapter))
+
+  groups <- split(df$max_sim, df$grp)
+  gnames <- names(groups)
+  grid <- expand.grid(a = gnames, b = gnames, stringsAsFactors = FALSE)
+  grid$delta <- mapply(
+    function(a, b) .cliffs_delta(groups[[a]], groups[[b]]),
+    grid$a, grid$b
+  )
+  grid
+}
+
+build_viz_chapter_cliffs_delta_fig <- function(
+  chapter_cliffs_delta,
+  chapter_alignment,   # for a meaningful row/col order (by median alignment)
+  figures_dir = "output/figures"
+) {
+  ord <- chapter_alignment |>
+    dplyr::mutate(grp = paste0(assessment, " / ", chapter)) |>
+    dplyr::arrange(dplyr::desc(median)) |>
+    dplyr::pull(grp)
+  d <- chapter_cliffs_delta |>
+    dplyr::mutate(
+      a = factor(a, levels = rev(ord)),
+      b = factor(b, levels = ord)
+    )
+  p <- ggplot2::ggplot(d, ggplot2::aes(x = b, y = a, fill = delta)) +
+    ggplot2::geom_tile() +
+    ggplot2::scale_fill_gradient2(
+      name = "Cliff's δ\n(row vs col)",
+      low = "#2166AC", mid = "white", high = "#B2182B",
+      midpoint = 0, limits = c(-1, 1)
+    ) +
+    ggplot2::labs(
+      x = "chapter (column)", y = "chapter (row)",
+      title = "Pairwise Cliff's δ between chapters",
+      subtitle = paste0(
+        "row vs column on max-keypaper-similarity: +1 = row's works all score ",
+        "higher, −1 = all lower, 0 = indistinguishable"
+      )
+    ) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      panel.grid = ggplot2::element_blank()
+    )
+  save_ggplot_png(p, "chapter_cliffs_delta", figures_dir, width = 10, height = 9)
+  p
+}
+
 # ---- 5c. Text length distribution per variant -----------------------------
 # Histogram of nchar(title), nchar(abstract), and nchar(title_abstract).
 # Computed via duckdb pushdown (length() in SQL) so 5.77M rows never

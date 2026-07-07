@@ -274,23 +274,6 @@ for (v in names(tb)) {
 }
 ```
 
-## Top matches per keypaper
-
-Concrete embedding sanity check: pick a keypaper to browse its
-highest-scoring corpus matches under the `title_abstract` variant (top
-1,000 precomputed per keypaper) — the `keypaper` column shows its id. The
-top mini-chart is the similarity distribution across *all* keypapers
-combined, always shown for reference; the chart below it is the
-distribution for whatever is currently selected. The matches should read
-as topically related to the keypaper. Links go to the DOI when the matched
-work has one, otherwise its OpenAlex page. Use the CSV button above the
-table to export the currently filtered rows.
-
-```{r}
-#| label: tbl-top-matches-per-kp
-tar_read(tbl_top_matches_per_kp)
-```
-
 # Variant agreement
 
 If `title` and `abstract` agree on a work's relevance, the title is a reliable
