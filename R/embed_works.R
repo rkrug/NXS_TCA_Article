@@ -160,20 +160,120 @@ embed_works <- function(
   }
   model_part <- gsub("/", "_", model_id, fixed = TRUE)
 
-  # ---- Scratch dir layout (mirrors openalexVectorComp::embed_corpus) -----
-  corpus_name <- basename(corpus_path)
-  scratch_project <- file.path(
-    out_dir, ".raw", config_name, source, variant_name
-  )
+  # ---- Embed each input partition into a mirrored output sub-leaf --------
+  # The corpus is hive-partitioned (e.g. chapter=Chapter%201/). We embed each
+  # sub-partition independently and mirror its relative sub-path into the
+  # output leaf, so `chapter` is carried through purely via the directory
+  # path and never becomes a data column — embed_corpus_parallel and the
+  # preprocessors stay untouched. A single-file input (keypaper) or a flat
+  # directory (pilot subset) yields one unnamed partition → the original
+  # flat-leaf behaviour, unchanged.
+  partitions <- enumerate_input_partitions(corpus_path)
+
+  base_scratch <- file.path(out_dir, ".raw", config_name, source, variant_name)
   if (!is.null(assessment) && nzchar(assessment)) {
-    scratch_project <- file.path(scratch_project, assessment)
+    base_scratch <- file.path(base_scratch, assessment)
   }
+  unlink(base_scratch, recursive = TRUE)
+  on.exit(unlink(base_scratch, recursive = TRUE), add = TRUE)
+
+  cleaner_args <- if (length(preprocessor_args)) preprocessor_args else list()
+
+  total_written <- 0L
+  for (i in seq_along(partitions)) {
+    part     <- partitions[[i]]
+    sub_rel  <- part$rel
+    sub_leaf <- if (nzchar(sub_rel)) file.path(leaf_dir, sub_rel) else leaf_dir
+    scr_key  <- if (nzchar(sub_rel)) sub_rel else "_flat"
+
+    total_written <- total_written + embed_one_partition(
+      part_files      = part$files,
+      sub_leaf        = sub_leaf,
+      scratch_project = file.path(base_scratch, scr_key),
+      backend         = backend,
+      model_part      = model_part,
+      cfg             = cfg,
+      source          = source,
+      variant_name    = variant_name,
+      part_tag        = if (nzchar(sub_rel)) sub_rel else "(flat)",
+      preprocessor    = preprocessor,
+      cleaner_args    = cleaner_args
+    )
+  }
+
+  message(sprintf(
+    "[%s|%s] all %d partition(s) done; wrote %s rows total to %s",
+    source, variant_name, length(partitions),
+    format(total_written, big.mark = ","), leaf_dir
+  ))
+  write_embed_marker(leaf_dir, total_written)
+  leaf_dir
+}
+
+# ----------------------------------------------------------------------------
+# Enumerate the hive sub-partitions of an embed input.
+#
+# Returns a list of partitions, each `list(rel = <sub-dir path relative to
+# corpus_path, "" when flat>, files = <absolute parquet paths>)`. A single
+# parquet file (keypaper) or a directory whose parquets sit at its root
+# (pilot subset) yields exactly one partition with `rel = ""`; a partitioned
+# corpus (…/chapter=Chapter%201/part-0.parquet) yields one partition per
+# distinct sub-dir. Ordering is stable (sorted by `rel`) so runs are
+# deterministic.
+# ----------------------------------------------------------------------------
+enumerate_input_partitions <- function(corpus_path) {
+  if (!dir.exists(corpus_path)) {
+    # Single-file input (keypaper) — one flat partition.
+    return(list(list(rel = "", files = normalizePath(corpus_path, mustWork = TRUE))))
+  }
+  base <- normalizePath(corpus_path, mustWork = TRUE)
+  all_pq <- list.files(base, pattern = "\\.parquet$",
+                       recursive = TRUE, full.names = TRUE)
+  if (length(all_pq) == 0L) {
+    stop("enumerate_input_partitions: no parquet files under ", corpus_path)
+  }
+  rel_files <- substring(normalizePath(all_pq), nchar(base) + 2L)  # drop "base/"
+  sub_rel   <- dirname(rel_files)
+  sub_rel[sub_rel == "."] <- ""
+  lapply(sort(unique(sub_rel)), function(sr) {
+    list(rel = sr, files = all_pq[sub_rel == sr])
+  })
+}
+
+# ----------------------------------------------------------------------------
+# Embed one input partition: symlink its parquet(s) into a private scratch
+# project, run embed_corpus_parallel (HTTP → TEI), then consolidate the
+# scratch shards into ~1 GB part-NNNN.parquet chunks under `sub_leaf` via a
+# streaming duckdb COPY. Returns the number of rows written.
+#
+# Factored out of embed_works so the per-partition loop can reuse it
+# verbatim; the consolidation logic is identical to the pre-partition
+# single-leaf path, just targeting `sub_leaf` instead of the top leaf.
+# ----------------------------------------------------------------------------
+embed_one_partition <- function(part_files, sub_leaf, scratch_project,
+                                backend, model_part, cfg, source,
+                                variant_name, part_tag,
+                                preprocessor, cleaner_args) {
+  if (!requireNamespace("duckdb", quietly = TRUE)) {
+    stop("Package 'duckdb' is required for the embed_works consolidation step. ",
+         "Install via: install.packages('duckdb')")
+  }
+  if (!requireNamespace("DBI", quietly = TRUE)) {
+    stop("Package 'DBI' is required for the embed_works consolidation step.")
+  }
+
+  # ---- Scratch dir layout (mirrors openalexVectorComp::embed_corpus) -----
+  # Symlink each parquet of this partition into a flat `input/` dir; arrow
+  # opens that dir as the corpus. basenames within one partition are unique
+  # (part-0.parquet, part-1.parquet, …), so no collision handling needed.
   unlink(scratch_project, recursive = TRUE)
-  dir.create(scratch_project, recursive = TRUE, showWarnings = FALSE)
-  file.symlink(
-    normalizePath(corpus_path, mustWork = TRUE),
-    file.path(scratch_project, corpus_name)
-  )
+  input_dir <- file.path(scratch_project, "input")
+  dir.create(input_dir, recursive = TRUE, showWarnings = FALSE)
+  for (f in part_files) {
+    file.symlink(normalizePath(f, mustWork = TRUE),
+                 file.path(input_dir, basename(f)))
+  }
+  corpus_name <- "input"
   raw_label_dir <- file.path(
     scratch_project, "embeddings",
     paste0("model_id=", model_part),
@@ -183,7 +283,7 @@ embed_works <- function(
   # ---- Progress watcher --------------------------------------------------
   n_in <- tryCatch(
     nrow(arrow::open_dataset(
-      corpus_path,
+      input_dir,
       factory_options = list(exclude_invalid_files = TRUE)
     )),
     error = function(e) NA_integer_
@@ -194,19 +294,17 @@ embed_works <- function(
       scratch_dir = raw_label_dir,
       n_in        = n_in,
       batch_size  = cfg$batch_size,
-      label       = sprintf("%s|%s", source, variant_name)
+      label       = sprintf("%s|%s|%s", source, variant_name, part_tag)
     )
     on.exit(stop_shard_watcher(watcher), add = TRUE)
   }
 
-  # ---- Embed -------------------------------------------------------------
   message(sprintf(
-    "--- config = %s, source = %s, variant = %s, input rows = %s ---",
-    config_name, source, variant_name,
+    "--- source = %s, variant = %s, partition = %s, input rows = %s ---",
+    source, variant_name, part_tag,
     if (is.na(n_in)) "?" else format(n_in, big.mark = ",")
   ))
 
-  cleaner_args <- if (length(preprocessor_args)) preprocessor_args else list()
   # Local drop-in replacement for openalexVectorComp::embed_corpus() that
   # parallelises ONLY the HTTP layer when cfg$concurrency > 1. concurrency = 1
   # (the default) is behaviourally identical to a sequential embed_corpus().
@@ -223,31 +321,19 @@ embed_works <- function(
   )
 
   # ---- Re-partition into ~1 GB consolidated parquet chunks per leaf -----
-  # Output shape: <leaf_dir>/part-{NNNN}.parquet — multiple files, each
+  # Output shape: <sub_leaf>/part-{NNNN}.parquet — multiple files, each
   # ~1 GB at SPECTER2 dimensionality (768 float32 cols × 250K rows). Row
   # groups remain 50K rows so analytical reads stay fast. config/source/
-  # variant are NOT written into the parquet itself; hive partitioning
-  # encodes them in the path, and arrow::open_dataset() synthesises them
-  # on read. A `batch` column is added from each scratch shard's batch
-  # number so the original embed_corpus_parallel ordering is recoverable.
+  # variant/assessment/chapter are NOT written into the parquet itself; hive
+  # partitioning encodes them in the path, and arrow::open_dataset()
+  # synthesises them on read. A `batch` column is added from each scratch
+  # shard's batch number so the embed_corpus_parallel ordering is recoverable.
   #
   # Why multi-file: ~1 GB chunks let rclone resume per-chunk on
-  # interruption (not per-leaf which used to be ~14 GB), and let duckdb
-  # httpfs parallelise reads across files on the BERTopic pod. Skip-guard
-  # is still presence-based via the marker file; arrow's open_dataset
-  # globs `*.parquet` so it doesn't care about file count.
-  #
-  # Streamed via duckdb's COPY — the arrow-side variants (collect first,
-  # lazy mutate, Scanner+ParquetFileWriter) all OOM'd at 4–5M rows on
-  # macOS. duckdb's parquet writer streams natively with bounded memory.
-  if (!requireNamespace("duckdb", quietly = TRUE)) {
-    stop("Package 'duckdb' is required for the embed_works consolidation step. ",
-         "Install via: install.packages('duckdb')")
-  }
-  if (!requireNamespace("DBI", quietly = TRUE)) {
-    stop("Package 'DBI' is required for the embed_works consolidation step.")
-  }
-
+  # interruption, and let duckdb httpfs parallelise reads across files on the
+  # BERTopic pod. Streamed via duckdb's COPY — the arrow-side variants
+  # (collect first, lazy mutate, Scanner+ParquetFileWriter) all OOM'd at
+  # 4–5M rows on macOS. duckdb's parquet writer streams with bounded memory.
   any_shard <- length(list.files(
     raw_label_dir, pattern = "[.]parquet$", recursive = TRUE
   ))
@@ -255,23 +341,23 @@ embed_works <- function(
     stop("No scratch parquets found under: ", raw_label_dir)
   }
 
-  dir.create(leaf_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(sub_leaf, recursive = TRUE, showWarnings = FALSE)
   # Write into a sibling tmp dir, then atomically move files into the
   # leaf. Avoids partial state if duckdb dies mid-write.
-  tmp_dir <- file.path(leaf_dir, ".parts.tmp")
+  tmp_dir <- file.path(sub_leaf, ".parts.tmp")
   if (dir.exists(tmp_dir)) unlink(tmp_dir, recursive = TRUE)
   dir.create(tmp_dir, recursive = TRUE)
   # Clear any stale part-*.parquet from a previous run in the leaf — the
   # marker file is what makes a leaf "complete"; we never accept a leaf
   # that has both old and new parts.
-  old_parts <- list.files(leaf_dir, pattern = "^part-.*[.]parquet$",
+  old_parts <- list.files(sub_leaf, pattern = "^part-.*[.]parquet$",
                           full.names = TRUE)
   if (length(old_parts)) file.remove(old_parts)
 
   shards_glob <- file.path(raw_label_dir, "batch=*", "embeddings-*.parquet")
   message(sprintf(
-    "[%s|%s] consolidating scratch shards into ~1 GB part-NNNN.parquet chunks via duckdb COPY",
-    source, variant_name
+    "[%s|%s|%s] consolidating scratch shards into ~1 GB part-NNNN.parquet chunks via duckdb COPY",
+    source, variant_name, part_tag
   ))
 
   con <- DBI::dbConnect(duckdb::duckdb())
@@ -313,19 +399,17 @@ embed_works <- function(
     stop("duckdb COPY produced no parquet files under ", tmp_dir)
   }
   for (p in new_parts) {
-    file.rename(p, file.path(leaf_dir, basename(p)))
+    file.rename(p, file.path(sub_leaf, basename(p)))
   }
   unlink(tmp_dir, recursive = TRUE)
 
   message(sprintf(
-    "[%s|%s] consolidation done; wrote %s rows across %d files to %s",
-    source, variant_name, format(n_written, big.mark = ","),
-    length(new_parts), leaf_dir
+    "[%s|%s|%s] consolidation done; wrote %s rows across %d files to %s",
+    source, variant_name, part_tag, format(n_written, big.mark = ","),
+    length(new_parts), sub_leaf
   ))
-  write_embed_marker(leaf_dir, n_written)
 
-  unlink(scratch_project, recursive = TRUE)
-  leaf_dir
+  n_written
 }
 
 # ----------------------------------------------------------------------------

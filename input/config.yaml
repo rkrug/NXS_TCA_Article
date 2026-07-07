@@ -47,7 +47,7 @@ embeddings:
     # RunPod-hosted TEI on a rented L40s/A100/H100. Flip embeddings.active above and
     # populate host/auth before use. See scripts/start_tei_runpod.sh.
     SPECTER2_runpod:
-      host: rqgzm5fx0lkbog-8080.proxy.runpod.net
+      host: pof6hmf5q6dfrk-8080.proxy.runpod.net
       port: 443
       scheme: https
       # auth_token_keyring: API_TEI   # keyring::key_set("API_TEI") first
@@ -103,7 +103,7 @@ r2:
 # under `configs:` and pointing one of the `active_*` keys at the new name.
 bertopic:
   active_local:   ~                    # which entry drives topics_local, ~ for disabled
-  active_runpod:  runpod_v5_supervised            # which entry drives topics_runpod
+  active_runpod:  runpod_v6_chapters            # which entry drives topics_runpod
   active_for_viz: runpod_v5_supervised            # which run feeds viz_topics_* in the report
 
   configs:
@@ -236,8 +236,8 @@ bertopic:
     runpod_v4:
       method: runpod
       # SSH transport — update ssh_host/ssh_port on each new pod dispatch.
-      ssh_host:        195.26.232.131
-      ssh_port:        50151
+      ssh_host:        64.247.206.221
+      ssh_port:        12789
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work
@@ -263,33 +263,34 @@ bertopic:
       random_seed: 13
 
 
-    # Supervised UMAP round 1 — concept-anchored clustering.
-    # Instead of relying on the corpus's own density structure (which
-    # collapsed to one blob in v2–v4: pairwise cosine 0.66–0.98), the
-    # UMAP fit is guided by 40 key concept definitions supplied as class
-    # labels. Each concept definition (title + abstract, embedded via
-    # SPECTER2) anchors one label; all ~4.6M corpus works are unlabelled
-    # (y = -1). UMAP's semi-supervised mode (target_metric=categorical,
-    # target_weight=0.5) pulls the manifold so concept-related works
-    # cluster near their concept's anchor rather than collapsing into a
-    # single cosine cone.
-    # Corpus embeddings reused from v4; UMAP/HDBSCAN/c-TF-IDF all rerun
-    # (new umap_hash due to supervised fit). target_weight is the main
-    # tuning knob: push toward 1.0 for tighter concept alignment, back
-    # toward 0.0 if the layout becomes too rigid.
+    # Supervised UMAP — concept-anchored clustering.
+    # The unsupervised fits (v2–v4) collapsed to one blob (pairwise cosine
+    # 0.66–0.98). Here each corpus work gets a class label = its NEAREST
+    # concept definition: argmax cosine to the concept/keypaper SPECTER2
+    # embeddings (the key_works set), computed on the pod from the RAW vectors
+    # — the same space as the keypaper scores — before any PCA/centring.
+    # Works whose best cosine is below `supervised_min_similarity` stay
+    # unlabelled (y = -1) and are placed by embedding geometry alone. cuml UMAP
+    # then fits with target_metric=categorical + target_weight, pulling each
+    # work toward its concept's region instead of collapsing into one cone.
+    # Corpus embeddings reused from earlier configs; UMAP/HDBSCAN/c-TF-IDF all
+    # rerun (the supervised knobs are part of umap_hash). Tuning knobs:
+    #   target_weight             0 = ignore labels … 1 = labels dominate.
+    #   supervised_min_similarity raise to leave weakly-related works unlabelled.
     runpod_v5_supervised:
       method: runpod
-      ssh_host:        64.247.206.214          # fill in after pod creation
-      ssh_port:        12492
+      ssh_host:        91.199.227.82   # update on each new pod dispatch
+      ssh_port:        16089
       ssh_user:        root
       ssh_key_path:    ~/.ssh/id_ed25519
       remote_workdir:  /work
 
-      # Supervised UMAP — key concept definitions provide class labels
+      # Supervised UMAP — each work labelled by its nearest concept (on-pod,
+      # from the key_works concept embeddings; no external label file needed).
       supervised_umap:    true
       target_metric:      categorical
       target_weight:      1          # 0 = fully unsupervised, 1 = fully label-driven; tune
-      concept_labels_path: input/key definitions/key_definitions_v1.csv
+      supervised_min_similarity: 0.0 # min cosine to nearest concept; below this -> unlabelled (-1)
 
       # Raw cosine on SPECTER2 embeddings (no PCA — supervised signal
       # provides the structure that PCA+whitening was trying to manufacture)
@@ -305,6 +306,42 @@ bertopic:
 
       top_n_words:         15
       keypaper_threshold:   1       # each concept keypaper should land in a topic
+      primary_variant:    title_abstract
+      fallback_variant:   title
+      vectorizer_min_df:        2
+      vectorizer_max_df:        0.95
+      vectorizer_max_features:  20000
+      vectorizer_ngram:        [1, 2]
+      random_seed: 13
+
+    # Unsupervised, scaled for THIS corpus (~6,856 chapter-tagged works, not
+    # the 5.7M-row TCAC corpus the v2–v4 knobs were tuned for). v4's
+    # min_cluster_size=100 collapsed everything into 2 topics, which then
+    # crashed c-TF-IDF (max_df < min_df on 2 docs). PCA + UMAP params are
+    # IDENTICAL to runpod_v4, so the UMAP R2 stage-cache hits and only
+    # HDBSCAN + c-TF-IDF + fallback re-run. Only the HDBSCAN sizes shrink.
+    # NOTE: this corpus is homogeneous (one assessment) — if this still
+    # under-separates, use runpod_v5_supervised (concept-anchored).
+    runpod_v6_chapters:
+      method: runpod
+      ssh_host:        91.199.227.82   # update on each new pod dispatch
+      ssh_port:        16089
+      ssh_user:        root
+      ssh_key_path:    ~/.ssh/id_ed25519
+      remote_workdir:  /work
+      # --- PCA + UMAP identical to runpod_v4 (keeps umap_hash → cache hit) ---
+      pca_n_components:  100
+      pca_whiten:        true
+      pca_sample_size:   500000
+      umap_n_components: 5
+      umap_n_neighbors:  15
+      umap_min_dist:     0.0
+      umap_metric:       euclidean
+      # --- HDBSCAN scaled down for ~7k works (was 100/10 in v4) -------------
+      hdbscan_min_cluster_size: 25
+      hdbscan_min_samples:       5
+      top_n_words:         15
+      keypaper_threshold:   1
       primary_variant:    title_abstract
       fallback_variant:   title
       vectorizer_min_df:        2

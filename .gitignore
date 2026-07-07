@@ -130,3 +130,7 @@ scripts/runpod/pods.conf
 scripts/runpod/pods.conf.NLI
 scripts/runpod/hosts.generated.csv
 scripts/runpod/hosts.generated.yaml
+
+# Python bytecode cache (from py_compile / local runs of run_bertopic_gpu.py)
+__pycache__/
+*.pyc

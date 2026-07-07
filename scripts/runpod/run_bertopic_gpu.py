@@ -139,6 +139,32 @@ def _setup_duckdb_s3(con: duckdb.DuckDBPyConnection, r2_cfg: dict) -> None:
     con.execute(f"SET s3_secret_access_key='{secret}'")
     con.execute("SET s3_url_style='path'")
     con.execute("SET s3_use_ssl=true")
+    # Defaults (http_timeout=30s, http_retries=3) are too thin for the
+    # multi-GB corpus parquet reads in this script — a single slow/dropped
+    # R2 response surfaces as a hard IOException instead of retrying. Seen
+    # in practice: a transient GET timeout on variant=title/part-0.parquet
+    # during stage_project_fallback killed an otherwise-complete run.
+    con.execute("SET http_timeout=120000")       # ms; was 30000
+    con.execute("SET http_retries=8")             # was 3
+    con.execute("SET http_retry_wait_ms=2000")
+    con.execute("SET http_retry_backoff=2")
+
+
+def _dedup_by_id(cols_all=None, id_col: str = "id") -> str:
+    """SQL suffix that keeps exactly one row per work id.
+
+    Works tagged with multiple chapters were embedded once per chapter
+    partition (dedup was disabled at embed time), so `id` repeats in the corpus
+    parquets. Keeping one row per unique work stops the topic model (UMAP
+    density, HDBSCAN, c-TF-IDF) from being biased by that multiplicity. The
+    duplicate rows carry identical embedding vectors (same text -> same vector),
+    so which copy survives is irrelevant. Returns '' when there is no id column
+    (nothing to dedup, e.g. a schema without id). Uses QUALIFY rather than
+    SELECT DISTINCT because `SELECT *` reads also carry per-copy metadata
+    (created_at, batch) that differs between chapter copies."""
+    if cols_all is not None and "id" not in cols_all:
+        return ""
+    return f" QUALIFY row_number() OVER (PARTITION BY {id_col}) = 1"
 
 
 def _read_embeddings_only(emb_root: str, variant: str, r2_cfg: dict) -> pd.DataFrame:
@@ -163,6 +189,7 @@ def _read_embeddings_only(emb_root: str, variant: str, r2_cfg: dict) -> pd.DataF
         select_list = ", ".join(f'"{c}"' for c in keep)
         df = con.execute(
             f"SELECT {select_list} FROM read_parquet('{pattern}', hive_partitioning = false)"
+            f"{_dedup_by_id(cols_all)}"
         ).fetchdf()
         if df.empty:
             raise FileNotFoundError(f"No rows at {pattern}")
@@ -190,6 +217,7 @@ def _read_full_variant_with_text(emb_root: str, variant: str, r2_cfg: dict) -> p
         select_list = ", ".join(f'"{c}"' for c in keep)
         df = con.execute(
             f"SELECT {select_list} FROM read_parquet('{pattern}', hive_partitioning = false)"
+            f"{_dedup_by_id(cols_all)}"
         ).fetchdf()
         if df.empty:
             raise FileNotFoundError(f"No rows at {pattern}")
@@ -208,6 +236,7 @@ def _read_text_only(emb_root: str, variant: str, r2_cfg: dict) -> pd.DataFrame:
         df = con.execute(
             f"SELECT id, title_clean, abstract_clean "
             f"FROM read_parquet('{pattern}', hive_partitioning = false)"
+            f"{_dedup_by_id()}"
         ).fetchdf()
         return df
     finally:
@@ -228,6 +257,7 @@ def _stream_variant_minus_primary(emb_root: str,
             WHERE f.id NOT IN (
               SELECT id FROM read_parquet('{_glob(emb_root, primary_variant)}', hive_partitioning = false)
             )
+            {_dedup_by_id(id_col="f.id")}
         """)
         while True:
             chunk = res.fetch_df_chunk()
@@ -335,6 +365,9 @@ _UMAP_FIELDS = (
     "primary_variant", "umap_n_components", "umap_n_neighbors",
     "umap_min_dist", "umap_metric", "random_seed", "center_embeddings",
     "pca_n_components", "pca_whiten", "pca_sample_size",
+    # Supervised UMAP (v0.1.18): labels derived on-pod from nearest concept.
+    "supervised_umap", "target_metric", "target_weight",
+    "supervised_min_similarity",
 )
 
 _HDBSCAN_FIELDS = _UMAP_FIELDS + (
@@ -379,12 +412,38 @@ def _apply_preprocessing(X: np.ndarray, mean_vec, pca_model) -> np.ndarray:
     return X
 
 
+def _nearest_concept_labels(X: np.ndarray, C: np.ndarray,
+                            min_sim: float = 0.0,
+                            chunk: int = 200_000) -> np.ndarray:
+    """Label each corpus row by its nearest concept via cosine similarity.
+
+    X: (n, d) RAW corpus embeddings; C: (K, d) RAW concept (keypaper)
+    embeddings. Returns an int32 array of length n: the index (0..K-1) of the
+    most-similar concept, or -1 when the best cosine is below `min_sim`
+    (cuml/umap-learn treat -1 in a categorical target as unlabeled, so those
+    rows are placed by the embedding geometry alone). Computed in row chunks so
+    the (n x K) similarity block never materialises in full for a large corpus.
+    """
+    Cn = C / np.clip(np.linalg.norm(C, axis=1, keepdims=True), 1e-12, None)
+    labels = np.full(X.shape[0], -1, dtype=np.int32)
+    for s in range(0, X.shape[0], chunk):
+        xb  = X[s:s + chunk]
+        xbn = xb / np.clip(np.linalg.norm(xb, axis=1, keepdims=True), 1e-12, None)
+        sims = xbn @ Cn.T
+        best = sims.argmax(axis=1)
+        best_sim = sims[np.arange(sims.shape[0]), best]
+        lab = best.astype(np.int32)
+        lab[best_sim < min_sim] = -1
+        labels[s:s + chunk] = lab
+    return labels
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: UMAP fit (corpus only, keypapers decoupled)
 # ---------------------------------------------------------------------------
 
 def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
-               cl: dict, umap_hash: str):
+               cl: dict, umap_hash: str, refer_root: str = None):
     bucket = r2_cfg["bucket"]
     prefix = f"intermediate/config={config_name}/umap_cfg={umap_hash}"
     keys = {
@@ -426,6 +485,32 @@ def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
     del df_corpus
     gc.collect()
     _heartbeat()
+
+    # ---- Supervised labels (optional): nearest concept per corpus work ---
+    # Derived from cosine similarity to the concept (keypaper) embeddings on
+    # the RAW SPECTER2 vectors — same space as score_keypapers — computed
+    # before any PCA/centring so the labels reflect true concept proximity,
+    # not the transformed geometry. Passed as y= to cuml UMAP below.
+    y_labels = None
+    if bool(cl.get("supervised_umap", False)):
+        if not refer_root:
+            raise SystemExit("supervised_umap=true but no reference (concept) "
+                             "embeddings dir was provided to stage_umap.")
+        min_sim = float(cl.get("supervised_min_similarity", 0.0))
+        print(f"[step] supervised UMAP: labelling {len(ids):,} works by nearest "
+              f"concept (variant={cl['primary_variant']}, min_similarity={min_sim})")
+        df_concept = _read_embeddings_only(refer_root, cl["primary_variant"], r2_cfg)
+        C = _matrix_from_df(df_concept)
+        n_concepts = len(df_concept)
+        del df_concept
+        gc.collect()
+        y_labels = _nearest_concept_labels(X, C, min_sim=min_sim)
+        n_labelled = int((y_labels >= 0).sum())
+        n_classes  = int(len(np.unique(y_labels[y_labels >= 0])))
+        print(f"        {n_concepts} concepts; labelled {n_labelled:,}/{len(ids):,} "
+              f"works ({n_labelled / max(len(ids),1):.1%}) into {n_classes} classes; "
+              f"{len(ids) - n_labelled:,} left unlabelled (-1)")
+        _heartbeat()
 
     # ---- Preprocessing: PCA (v4+) or mean-centring (v3) ------------------
     pca_model = None
@@ -480,15 +565,28 @@ def stage_umap(corpus_root: str, r2_cfg: dict, config_name: str,
     print(f"[step] cuml.UMAP fit_transform on {n_corpus:,} rows "
           f"(input dim={X.shape[1]})")
     from cuml.manifold import UMAP as cumlUMAP
-    umap_model = cumlUMAP(
+    umap_kwargs = dict(
         n_components=int(cl.get("umap_n_components", 5)),
         n_neighbors=int(cl.get("umap_n_neighbors",  15)),
         min_dist=float(cl.get("umap_min_dist",       0.0)),
         metric=cl.get("umap_metric", "euclidean"),
         random_state=int(cl.get("random_seed", 13)),
     )
-    t0       = time.time()
-    umap_arr = umap_model.fit_transform(X)
+    if y_labels is not None:
+        # Semi-/fully-supervised UMAP: target_weight in [0,1] sets how strongly
+        # the concept labels pull the layout (0 = ignore labels, 1 = labels
+        # dominate). Configurable via bertopic.configs.<name>.target_weight.
+        umap_kwargs["target_metric"] = cl.get("target_metric", "categorical")
+        umap_kwargs["target_weight"] = float(cl.get("target_weight", 0.5))
+        print(f"[step] supervised fit: target_metric={umap_kwargs['target_metric']}, "
+              f"target_weight={umap_kwargs['target_weight']}")
+    umap_model = cumlUMAP(**umap_kwargs)
+    t0 = time.time()
+    if y_labels is not None:
+        # cuml treats label -1 as unlabelled for a categorical target.
+        umap_arr = umap_model.fit_transform(X, y=y_labels.astype(np.float32))
+    else:
+        umap_arr = umap_model.fit_transform(X)
     print(f"[time] UMAP fit_transform: {time.time() - t0:.1f}s")
     _heartbeat()
 
@@ -635,7 +733,11 @@ def stage_ctfidf(corpus_root: str, topics_corpus: pd.DataFrame,
                     COALESCE(c.title_clean, '') || ' ' || COALESCE(c.abstract_clean, ''),
                     ' '
                 ) AS doc
-            FROM read_parquet('{pattern}', hive_partitioning = false) c
+            FROM (
+                SELECT id, title_clean, abstract_clean
+                FROM read_parquet('{pattern}', hive_partitioning = false)
+                QUALIFY row_number() OVER (PARTITION BY id) = 1
+            ) c
             JOIN topics_corpus_view tc
               ON CAST(c.id AS VARCHAR) = tc.id
             WHERE tc.topic_id >= 0
@@ -651,14 +753,51 @@ def stage_ctfidf(corpus_root: str, topics_corpus: pd.DataFrame,
 
     print(f"[step] CountVectorizer + TfidfTransformer on {len(docs_per_topic)} topic-documents")
     from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-    cv = CountVectorizer(
-        stop_words="english",
-        min_df=int(cl.get("vectorizer_min_df", 2)),
-        max_df=float(cl.get("vectorizer_max_df", 0.95)),
-        max_features=int(cl.get("vectorizer_max_features", 20_000)),
-        ngram_range=tuple(cl.get("vectorizer_ngram", [1, 2])),
-    )
-    counts = cv.fit_transform(docs_per_topic["doc"].values)
+
+    # Degenerate-clustering guard. When HDBSCAN produces very few non-noise
+    # topics (e.g. a homogeneous corpus collapsing to 1–2 topics), the
+    # configured document-frequency filters can become infeasible and sklearn
+    # raises mid-run. sklearn's own check is `max_df * n_docs < min_df` (both
+    # as document counts). Rather than crash the whole pod job at this late
+    # stage, clamp to a valid, minimally-filtering pair and warn — a tiny topic
+    # count is itself the signal that the clustering needs retuning.
+    n_docs     = len(docs_per_topic)
+    if n_docs == 0:
+        raise SystemExit(
+            "[ctfidf] no non-noise topics to vectorise — every corpus work "
+            "landed in the noise topic (-1). Loosen HDBSCAN "
+            "(hdbscan_min_cluster_size / hdbscan_min_samples) or use a "
+            "supervised config (supervised_umap: true)."
+        )
+    ngram      = tuple(cl.get("vectorizer_ngram", [1, 2]))
+    max_feat   = int(cl.get("vectorizer_max_features", 20_000))
+    req_min_df = int(cl.get("vectorizer_min_df", 2))
+    req_max_df = float(cl.get("vectorizer_max_df", 0.95))
+    eff_min_df, eff_max_df = req_min_df, req_max_df
+    if req_min_df > n_docs or req_max_df * n_docs < req_min_df:
+        print(f"[ctfidf] WARNING: only {n_docs} topic-document(s); configured "
+              f"min_df={req_min_df}/max_df={req_max_df} is infeasible "
+              f"(max_df -> {req_max_df * n_docs:.1f} docs < min_df). Falling "
+              f"back to min_df=1, max_df=1.0 (no doc-frequency filtering). "
+              f"Topic words will be noisy — this signals a near-degenerate "
+              f"clustering; retune HDBSCAN or use a supervised config.")
+        eff_min_df, eff_max_df = 1, 1.0
+
+    def _make_cv(min_df, max_df):
+        return CountVectorizer(
+            stop_words="english", min_df=min_df, max_df=max_df,
+            max_features=max_feat, ngram_range=ngram,
+        )
+    try:
+        cv = _make_cv(eff_min_df, eff_max_df)
+        counts = cv.fit_transform(docs_per_topic["doc"].values)
+    except ValueError as e:
+        # Belt-and-braces: any residual infeasibility (e.g. empty vocab after
+        # stop-word/max_features pruning) — retry with no df filtering.
+        print(f"[ctfidf] WARNING: CountVectorizer failed ({e}); "
+              f"retrying with min_df=1, max_df=1.0.")
+        cv = _make_cv(1, 1.0)
+        counts = cv.fit_transform(docs_per_topic["doc"].values)
     tfidf = TfidfTransformer(smooth_idf=True, sublinear_tf=False)
     weights = tfidf.fit_transform(counts).toarray()
     vocab = np.array(cv.get_feature_names_out())
@@ -863,7 +1002,7 @@ def main() -> int:
 
     # -------- Stage 1: UMAP fit (or load) --------------------------------
     umap_model, umap_coords, mean_vec, pca_model = stage_umap(
-        corpus_root, r2_cfg, config_name, cl, umap_hash
+        corpus_root, r2_cfg, config_name, cl, umap_hash, refer_root=refer_root
     )
     _heartbeat()
 

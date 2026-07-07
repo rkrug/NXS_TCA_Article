@@ -11,6 +11,17 @@ Semantic versioning, loosely:
   new watchdog signal).
 - **PATCH** — bug fixes, dependency bumps, small entrypoint tweaks.
 
+## v0.1.3 — 2026-07-07
+
+Tag bump only — resolve a collision on the `proximity-v0.1.2` tag. The sibling
+repo published a `runpodctl config`-based watchdog under that same tag on
+2026-07-03; this repo's v0.1.2 source instead uses the REST-API watchdog (see
+below) but was never pushed. v0.1.3 claims a distinct tag so the source here
+and the registry image agree. No functional change vs this repo's v0.1.2
+source: still the REST-API idle watchdog, which needs only RUNPOD_API_KEY (from
+the `{{ RUNPOD_SECRET_runpod_api_key }}` pod-template env, resolved by RunPod at
+pod launch).
+
 ## v0.1.2 — 2026-07-06
 
 - **tei_idle_watchdog.sh**: self-stop now calls the RunPod REST API

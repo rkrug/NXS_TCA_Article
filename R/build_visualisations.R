@@ -121,9 +121,16 @@ read_scores_long <- function(
       "GREATEST(%s)",
       paste(sprintf('"%s"', score_cols), collapse = ", ")
     )
+    # Dedup by id: works tagged with multiple chapters were embedded (and
+    # scored) once per chapter partition, so the scores parquet repeats ids.
+    # Keep one row per work per variant — the duplicate rows carry an identical
+    # score (same embedding), and counting a multi-chapter work once is what
+    # every downstream per-work stat / figure wants. Also removes the dup-id
+    # side of the many-to-many joins against corpus metadata below.
     sql <- sprintf(
       "SELECT id, '%s' AS variant, %s AS score
-         FROM read_parquet('%s')",
+         FROM read_parquet('%s')
+         QUALIFY row_number() OVER (PARTITION BY id) = 1",
       variant,
       greatest_expr,
       f
@@ -279,7 +286,8 @@ viz_top_bottom_tables <- function(scores_long, corpus, n = 10) {
   titles <- arrow::open_dataset(corpus) |>
     dplyr::filter(id %in% picked$id) |>
     dplyr::select(id, title) |>
-    dplyr::collect()
+    dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE)   # corpus repeats ids across chapters
 
   joined <- picked |>
     dplyr::left_join(titles, by = "id") |>
@@ -494,10 +502,14 @@ build_viz_top_matches_per_kp_data <- function(
   kp_cols <- setdiff(cols, c("id", "config", "variant"))
 
   parts <- lapply(kp_cols, function(kp) {
+    # Dedup by id before ranking: the scores parquet repeats ids (works
+    # embedded once per chapter partition), so without this the same work
+    # could occupy several of the top-N slots for one keypaper.
     sql <- sprintf(
       'SELECT id AS match_id, "%s" AS similarity
          FROM read_parquet(\'%s\')
         WHERE "%s" IS NOT NULL
+        QUALIFY row_number() OVER (PARTITION BY id) = 1
         ORDER BY similarity DESC
         LIMIT %d',
       kp, f, kp, n_matches
@@ -518,6 +530,7 @@ build_viz_top_matches_per_kp_data <- function(
     dplyr::select(id, doi, title, citation) |>
     dplyr::filter(id %in% unique(matches$match_id)) |>
     dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE) |>   # corpus repeats ids across chapters
     dplyr::rename(
       match_id = id, match_doi = doi,
       match_title = title, match_citation = citation
@@ -854,7 +867,8 @@ build_viz_score_year_data <- function(
 ) {
   years <- arrow::open_dataset(corpus) |>
     dplyr::select(id, publication_year) |>
-    dplyr::collect()
+    dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE)   # corpus repeats ids across chapters
 
   joined <- scores_long |>
     dplyr::inner_join(years, by = "id") |>
@@ -947,8 +961,10 @@ build_viz_score_year_fig <- function(
 
 build_viz_type_counts <- function(corpus, min_pct = 0.5) {
   arrow::open_dataset(corpus) |>
-    dplyr::count(type) |>
+    dplyr::select(id, type) |>
     dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE) |>   # one row per work (ids repeat across chapters)
+    dplyr::count(type) |>
     dplyr::mutate(
       pct = 100 * n / sum(n),
       popular = pct >= min_pct,
@@ -999,6 +1015,7 @@ build_viz_type_score_stats <- function(
   types_df <- arrow::open_dataset(corpus) |>
     dplyr::select(id, type) |>
     dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE) |>   # corpus repeats ids across chapters
     dplyr::mutate(type = ifelse(is.na(type) | type == "", "(unknown)", type))
 
   total <- nrow(types_df)
@@ -1101,8 +1118,10 @@ build_viz_type_score_box_fig <- function(
 
 build_viz_language_counts <- function(corpus, min_pct = 0.5) {
   arrow::open_dataset(corpus) |>
-    dplyr::count(language) |>
+    dplyr::select(id, language) |>
     dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE) |>   # one row per work (ids repeat across chapters)
+    dplyr::count(language) |>
     dplyr::mutate(
       pct = 100 * n / sum(n),
       popular = pct >= min_pct,
@@ -1481,7 +1500,8 @@ build_viz_citation_score_data <- function(
 ) {
   meta <- arrow::open_dataset(corpus) |>
     dplyr::select(id, cited_by_count) |>
-    dplyr::collect()
+    dplyr::collect() |>
+    dplyr::distinct(id, .keep_all = TRUE)   # corpus repeats ids across chapters
   joined <- scores_long |>
     dplyr::inner_join(meta, by = "id") |>
     dplyr::filter(!is.na(cited_by_count))

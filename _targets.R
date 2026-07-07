@@ -46,6 +46,11 @@ emb_cfg <- emb_cfg_full[setdiff(names(emb_cfg_full), emb_volatile)]
 zotero_tca_id  <- cfg$zotero$assessments$tca$id
 zotero_nxs_id  <- cfg$zotero$assessments$nxs$id
 zotero_keyring <- cfg$zotero$api_key_keyring
+# Config names baked into the rendered report filenames. tar_quarto's
+# output_file is evaluated eagerly at pipeline-construction time, so these must
+# be plain script variables (not targets). emb_name (above) is the active
+# embedding config; bertopic_viz_name is the active_for_viz BERTopic run.
+bertopic_viz_name <- cfg$bertopic$active_for_viz
 # Sys.setenv(OVC_API_TOKEN = keyring::key_get("API_openai"))  # only when provider == openai
 
 tar_option_set(
@@ -412,6 +417,44 @@ list(
     format = "file"
   ),
 
+  # Combined, hive-partitioned scores (config/assessment/chapter) — one score
+  # per corpus work from its title_abstract embedding, supplemented by the
+  # title embedding where the work has no abstract (so is absent from the
+  # title_abstract variant). Mirrors the corpus embedding hive layout. Added
+  # alongside the flat per-variant scores above (which feed the existing viz
+  # layer); these partitioned datasets are for export / per-chapter analysis.
+  #
+  # Two references for the title-only fallback works:
+  #   scores_combined         — like-for-like: fallback works scored vs the
+  #                             keypaper *title* reference.
+  #   scores_combined_ta_ref  — fallback works scored vs the keypaper
+  #                             *title_abstract* reference (always ta ref).
+  # Abstract-having works are title_abstract vs title_abstract in both.
+  tar_target(
+    scores_combined,
+    score_keypapers_combined(
+      corpus_ta_dir    = emb_corpus_title_abstract,
+      corpus_title_dir = emb_corpus_title,
+      ref_ta_dir       = emb_keypapers_title_abstract,
+      ref_title_dir    = emb_keypapers_title,
+      out_dir          = "output/NXS_TCA_corpus/scores_combined",
+      fallback_ref     = "title"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    scores_combined_ta_ref,
+    score_keypapers_combined(
+      corpus_ta_dir    = emb_corpus_title_abstract,
+      corpus_title_dir = emb_corpus_title,
+      ref_ta_dir       = emb_keypapers_title_abstract,
+      ref_title_dir    = emb_keypapers_title,
+      out_dir          = "output/NXS_TCA_corpus/scores_combined_ta_ref",
+      fallback_ref     = "title_abstract"
+    ),
+    format = "file"
+  ),
+
   # Track config.yaml as a file dep, then expose individual bertopic configs
   # so each named run becomes its own DAG node. Downstream targets depend on
   # the subset of the config they care about, so changes to unrelated
@@ -503,12 +546,11 @@ list(
   },
 
   # The RunPod pod reads embeddings straight from R2 (no rsync upload) — see
-  # run_bertopic_runpod()'s "Translate local emb dirs -> s3:// URIs" step.
-  # Corpus embeddings are frozen/static and already mirrored to R2 once;
-  # keypaper embeddings change whenever the keypaper set changes and must be
-  # re-pushed, or the pod silently scores against a stale set. This target
-  # depends on all three emb_keypapers_* so it re-syncs whenever any of them
-  # change, and topics_runpod takes it as a dep token below so the
+  # run_bertopic_runpod()'s "Translate local emb dirs -> s3:// URIs" step. Both
+  # the corpus and keypaper embeddings must therefore be mirrored to R2 before
+  # dispatch, or the pod silently reads a stale/absent set. These two sync
+  # targets depend on all three emb_* variants each, so they re-push whenever
+  # any embedding changes; topics_runpod takes both as dep tokens below so the
   # sync always happens before dispatch.
   tar_target(
     emb_keypapers_r2_synced,
@@ -517,6 +559,20 @@ list(
       emb_keypapers_abstract,
       emb_keypapers_title_abstract,
       r2_cfg = bertopic_runpod_cfg$r2
+    ),
+    format = "file"
+  ),
+  # Corpus embeddings → R2. Excludes the "No Chapter" partitions so BERTopic
+  # clusters only chapter-assigned works (see sync_corpus_embeddings_to_r2()).
+  # Small enough here to re-sync per run (unlike the ~6M-row TCAC 2.0 corpus).
+  tar_target(
+    emb_corpus_r2_synced,
+    sync_corpus_embeddings_to_r2(
+      emb_corpus_title,
+      emb_corpus_abstract,
+      emb_corpus_title_abstract,
+      r2_cfg = bertopic_runpod_cfg$r2,
+      exclude_no_chapter = TRUE
     ),
     format = "file"
   ),
@@ -533,7 +589,8 @@ list(
       run_name = bertopic_runpod_run_name,
       fallback_corpus = emb_corpus_title,
       fallback_ref = emb_keypapers_title,
-      keypaper_r2_synced = emb_keypapers_r2_synced
+      keypaper_r2_synced = emb_keypapers_r2_synced,
+      corpus_r2_synced = emb_corpus_r2_synced
     ),
     format = "file"
   ),
@@ -828,8 +885,11 @@ list(
   # Render the embeddings report. Re-builds whenever any score parquet,
   # the embeddings dataset, or the .qmd itself changes.
   tarchetypes::tar_quarto(
-    report_embeddings,
+    report_embeddings_render,
     path = "NXS TCS Article Embedding Report.qmd",
+    output_file = paste0(
+      "NXS TCS Article Embedding Report - ", emb_name, ".html"
+    ),
     quiet = TRUE
   ),
 
@@ -837,36 +897,55 @@ list(
   # targets (corpus, key_works, topics_runpod, ...) or the
   # .qmd itself changes.
   tarchetypes::tar_quarto(
-    report_topic_modelling,
+    report_topic_modelling_render,
     path = "NXS TCS Article Topic Modelling Report.qmd",
+    output_file = paste0(
+      "NXS TCS Article Topic Modelling Report - ", bertopic_viz_name, ".html"
+    ),
     quiet = TRUE
   ),
 
-  # Extracted as its own target (rather than reading config_file inline in
-  # report_topic_modelling_named) so unrelated config.yaml edits don't
-  # register as a "changed" dependency for the copy step below — targets
-  # content-hashes this target's output, so the copy only re-runs when the
-  # active_for_viz *value* actually changes.
+  # Sync the rendered reports into output/reports/. Each report's filename
+  # already carries its config name (baked into output_file above via
+  # emb_name / bertopic_viz_name), so switching the active config produces a
+  # differently-named file rather than overwriting the previous one — these
+  # copies just collect the per-config reports into one folder. tar_quarto's
+  # format="file" value is c(<rendered>.html, <source>.qmd) — it tracks the
+  # input alongside the output for staleness — so pick out just the .html.
   tar_target(
-    bertopic_active_for_viz,
-    yaml::read_yaml(config_file)$bertopic$active_for_viz
-  ),
-
-  # Archive a per-config copy alongside the plain rendered report, so
-  # switching bertopic.active_for_viz (e.g. runpod_v4 -> runpod_v5_supervised)
-  # doesn't overwrite the previous config's report — each config gets its own
-  # tracked file. Re-copies whenever the render or active_for_viz changes.
-  tar_target(
-    report_topic_modelling_named,
+    report_embeddings,
     {
-      dest <- file.path(
-        dirname(report_topic_modelling),
-        paste0(
-          "NXS TCS Article Topic Modelling Report - ",
-          bertopic_active_for_viz, ".html"
-        )
-      )
-      file.copy(report_topic_modelling, dest, overwrite = TRUE)
+      src <- report_embeddings_render[grepl("\\.html$", report_embeddings_render)]
+      if (length(src) != 1) {
+        stop("Expected exactly one rendered .html among ",
+             "report_embeddings_render's tracked files, got: ",
+             paste(report_embeddings_render, collapse = ", "))
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
+      dest
+    },
+    format = "file"
+  ),
+  tar_target(
+    report_topic_modelling,
+    {
+      src <- report_topic_modelling_render[grepl("\\.html$", report_topic_modelling_render)]
+      if (length(src) != 1) {
+        stop("Expected exactly one rendered .html among ",
+             "report_topic_modelling_render's tracked files, got: ",
+             paste(report_topic_modelling_render, collapse = ", "))
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
       dest
     },
     format = "file"

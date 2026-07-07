@@ -19,8 +19,9 @@
 # requests to create one).
 
 # Bump the tag after rebuilding/pushing (see docker/bertopic-runpod/CHANGES.md
-# for the current version — v0.1.14 adds PCA+whitening preprocessing).
-IMAGE="ghcr.io/rkrug/bertopic-runpod:v0.1.14"
+# for the current version — v0.1.20 = dedup corpus works by id on read, on top
+# of v0.1.19 c-TF-IDF guard / v0.1.18 supervised UMAP / v0.1.17 watchdog+httpfs).
+IMAGE="ghcr.io/rkrug/bertopic-runpod:v0.1.20"
 
 # GPU type id exactly as RunPod expects it. List available ids with:
 #   curl -s https://rest.runpod.io/v1/gpuTypes \
@@ -76,14 +77,20 @@ POD_ENV_RUNPOD_API_KEY='{{ RUNPOD_SECRET_runpod_api_key }}'
 #                           the private key at bertopic.configs.<name>.ssh_key_path
 #                           in config.yaml (default ~/.ssh/id_ed25519).
 #   R2_ACCESS_KEY_ID       — reads embeddings + intermediate BERTopic cache
-#   R2_SECRET_ACCESS_KEY   — directly from Cloudflare R2 (reimagine-tfc bucket)
-#                            via duckdb httpfs. Store both as RunPod Secrets
-#                            (console -> Secrets) first; referenced here by
-#                            name, never as raw values.
+#   R2_SECRET_ACCESS_KEY   — directly from the Cloudflare R2 nxs-tca-article
+#                            bucket via duckdb httpfs.
+#
+# The R2 values are injected as REAL keys from the same keyring entries the
+# pipeline's R2-sync targets use (R2_ACCESS_KEY / R2_SECRET_KEY) — proven to
+# have access to the nxs-tca-article bucket. NOT via '{{ RUNPOD_SECRET_... }}':
+# those pod Secrets hold a different (old, wrong-bucket) key and the pod's R2
+# reads 401'd against this bucket. Injecting the keyring keys guarantees the
+# pod uses the exact credentials that just uploaded the embeddings. Trade-off:
+# the raw keys appear in the pod env / create request body (not hosts.generated.*).
 EXTRA_ENV=(
   "PUBLIC_KEY=$(cat ~/.ssh/id_ed25519.pub 2>/dev/null)"
-  "R2_ACCESS_KEY_ID={{ RUNPOD_SECRET_r2_access_key_id }}"
-  "R2_SECRET_ACCESS_KEY={{ RUNPOD_SECRET_r2_secret_access_key }}"
+  "R2_ACCESS_KEY_ID=$(Rscript -e 'cat(keyring::key_get("R2_ACCESS_KEY"))' 2>/dev/null)"
+  "R2_SECRET_ACCESS_KEY=$(Rscript -e 'cat(keyring::key_get("R2_SECRET_KEY"))' 2>/dev/null)"
 )
 
 # How long (seconds) to poll GET /pods/{id} for publicIp + portMappings

@@ -7,6 +7,81 @@ Semantic versioning, loosely:
 - **MINOR** — new feature in the image (new entrypoint behaviour, new bundled tool, etc.).
 - **PATCH** — bug fixes, small tweaks, dependency bumps that don't change the surface.
 
+## v0.1.20 — 2026-07-07
+
+Dedup corpus works by id when reading embeddings.
+
+- Works tagged with multiple Zotero chapters were embedded once per chapter
+  partition (dedup disabled at embed time), so a work's `id` repeats in the
+  corpus parquets — up to 11× here (2,465 works duplicated, ~3,100 extra rows).
+  BERTopic was consuming every copy: inflating local density for UMAP, biasing
+  HDBSCAN, and double-counting the same abstract in c-TF-IDF.
+- New `_dedup_by_id()` SQL suffix (`QUALIFY row_number() OVER (PARTITION BY
+  id) = 1`) is now applied at every corpus read site: UMAP-fit embeddings
+  read, c-TF-IDF per-topic text aggregation, and the fallback-variant stream.
+  Duplicate rows carry identical embedding vectors, so which copy survives is
+  irrelevant. Keypaper/reference reads are already unique — a no-op there.
+- Topic assignments (topics.parquet) are therefore one row per unique work;
+  the chapter multiplicity re-enters only downstream when the R viz maps a
+  work's topic back onto each chapter it belongs to.
+- CACHE NOTE: dedup changes the data the model sees but not any cfg hash, so
+  the R2 `intermediate/` stage cache from a pre-dedup run would be reused and
+  mask the fix. Purge the intermediate cache for the config (or run under a new
+  config name) after deploying — see pods.conf.bertopic / README.
+
+## v0.1.19 — 2026-07-07 (built + pushed)
+
+Harden `stage_ctfidf` against degenerate clusterings.
+
+- When HDBSCAN collapses to very few non-noise topics (a homogeneous corpus
+  → 1–2 topics), the configured `vectorizer_min_df`/`vectorizer_max_df` become
+  infeasible and sklearn raised `max_df corresponds to < documents than min_df`
+  mid-run, killing the whole pod job after UMAP+HDBSCAN had already completed.
+  Now the vectorizer step mirrors sklearn's own `max_df * n_docs < min_df`
+  check up front, clamps to `min_df=1, max_df=1.0` with a warning when the
+  configured pair is infeasible, and wraps the fit in a fallback retry.
+- All-noise guard: if every work landed in topic -1 (0 topic-documents), exit
+  with a clear message pointing at HDBSCAN retuning / supervised mode instead
+  of an opaque vectorizer error.
+- Behaviour on healthy runs (enough topics) is unchanged.
+
+## v0.1.18 — 2026-07-07
+
+Supervised UMAP — concept-anchored clustering.
+
+- **Supervised UMAP** (`supervised_umap: true`). In `stage_umap`, each corpus
+  work is labelled by its nearest concept — argmax cosine to the concept
+  (keypaper) embeddings, computed on the pod from the RAW SPECTER2 vectors
+  (same space as the scores) before PCA/centring. Works below
+  `supervised_min_similarity` stay unlabelled (`y=-1`). cuml UMAP then fits
+  with `target_metric` + `target_weight` (both config-driven), passing
+  `y=` labels. New config keys `supervised_umap`, `target_metric`,
+  `target_weight`, `supervised_min_similarity` are folded into `umap_hash`, so
+  a supervised run caches to its own prefix and does not collide with the
+  unsupervised fits. No external label file — the label source is the concept
+  embeddings already on R2 (`reference_emb_dir`). Unsupervised configs are
+  unaffected (`supervised_umap` defaults false).
+
+## v0.1.17 — 2026-07-07 (built + pushed)
+
+Working idle-watchdog via the RunPod REST API + httpfs-retry hardening.
+Consolidates this repo onto a single fresh tag above the sibling repo's
+v0.1.15/v0.1.16 (shared ghcr.io/rkrug/bertopic-runpod line).
+
+- `bertopic_idle_watchdog.sh`: self-stop calls the RunPod REST API
+  (`POST https://rest.runpod.io/v1/pods/<id>/stop`, `Authorization: Bearer
+  $RUNPOD_API_KEY`) instead of `runpodctl stop pod`. `runpodctl` needs a
+  `runpodctl config` file the pod doesn't have (it failed with "Runpod config
+  file not found" / statuscode 400 and, under `set -euo pipefail`, killed the
+  watchdog so the pod never stopped). The REST call needs only RUNPOD_API_KEY
+  (supplied via the `{{ RUNPOD_SECRET_runpod_api_key }}` pod-template env, which
+  RunPod resolves at pod launch) and matches scripts/runpod/stop_pods.sh — the
+  REST equivalent of the sibling repo's v0.1.16 `runpodctl config` fix.
+- `run_bertopic_gpu.py::_setup_duckdb_s3()`: raise `http_timeout` to 120000ms
+  and `http_retries` to 8 (+ `http_retry_wait_ms`/`http_retry_backoff`) so a
+  transient R2 GET blip retries instead of killing a near-complete run. Ports
+  the sibling repo's v0.1.15 fix.
+
 ## v0.1.14 — 2026-06-30 (built + pushed)
 
 Add optional PCA + whitening before UMAP fit (runpod_v4), plus corpus
