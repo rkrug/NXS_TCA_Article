@@ -179,99 +179,17 @@ tar_read(viz_truncation_stats) |>
 ```
 
 
-# Score distributions per variant
-
-For each corpus work, the **max** cosine similarity against any keypaper is the
-single most useful summary — it answers "how close is this work to its nearest
-reference paper?" A well-calibrated embedding produces a bimodal distribution:
-relevant works pile up on the right, irrelevant on the left.
-
-```{r}
-#| label: tbl-score-summary
-tar_read(viz_score_summary_tbl) |>
-  knitr::kable(
-    caption = "Summary statistics of the embeddings, split by source of embedding.",
-    format.args = list(big.mark = ","),
-  )
-```
-
-```{r}
-#| label: fig-score-dist
-#| fig-cap: "Distribution of max cosine similarity to keypapers, per variant. Higher = closer to nearest reference. A clear bimodal shape indicates the embedding separates topic-relevant from off-topic works."
-tar_read(viz_score_dist_fig)
-```
-
-```{r}
-#| label: fig-score-ecdf
-#| fig-cap: "Empirical CDF of max cosine similarity to nearest keypaper, per variant (subsample of 50,000 works per variant, seed = 13). Read horizontally: for any score threshold, the curves give the fraction of works at or below that score. The gap between curves shows where variants disagree about how 'close to relevant' a typical work is."
-tar_read(viz_score_ecdf_fig)
-```
-
-## Score vs publication year
-
-Does similarity to keypapers correlate with how recent a work is? A
-strong bias either way suggests the keypaper set is anchored to a
-particular era and may need broadening.
-
-```{r}
-#| label: fig-score-year
-#| fig-cap: "2D histogram of max cosine similarity (y) against publication year (x), per variant. Log-scale fill reveals the tail; uniform vertical density at every year is the null-hypothesis appearance — the keypaper set has no temporal bias."
-tar_read(viz_score_year_fig)
-```
-
-## Score vs citation count
-
-Are high-similarity works also highly cited? Topical relevance and
-citation impact are different signals — a strong correlation here would
-suggest the embedding is mostly picking up "prestige", not topic.
-
-```{r}
-#| label: fig-citation-score
-#| fig-cap: "2D histogram of max cosine similarity (y) against log10(cited_by_count + 1) (x), per variant. A horizontal band = no relationship between citation and similarity (good — they're independent signals). Diagonal correlation would suggest the embedding co-varies with citation impact rather than topic."
-tar_read(viz_citation_score_fig)
-```
-
 # Work-type breakdown
 
 The OpenAlex corpus contains 19 work types — overwhelmingly `article`,
 plus reviews, book chapters, preprints and a long tail of small types
-(letters, errata, paratext, …). Counts per type set the baseline; score
-distributions per type say whether the embedding treats them
-differently.
+(letters, errata, paratext, …). Counts per type set the baseline; the
+score-by-type breakdown lives in the Chapter Analysis report.
 
 ```{r}
 #| label: fig-type-counts
-#| fig-cap: "Number of works per OpenAlex `type`, log x-axis. Blue bars = types representing ≥ 0.5% of the corpus (kept for the score plots below); grey = long-tail types (still shown here for context)."
+#| fig-cap: "Number of works per OpenAlex `type`, log x-axis. Blue bars = types representing ≥ 0.5% of the corpus; grey = long-tail types."
 tar_read(viz_type_count_fig)
-```
-
-```{r}
-#| label: fig-type-score-heatmap
-#| fig-cap: "Median max-similarity score per (type, variant), for types with ≥ 0.5% of the corpus. Cells annotated with `median (n=…)`. Types sorted by overall median — top of the column scores best."
-tar_read(viz_type_score_heatmap_fig)
-```
-
-```{r}
-#| label: fig-type-score-box
-#| fig-cap: "Score distribution per type, per variant. Boxes show q05–q25–median–q75–q95 (precomputed). Filtered to types with ≥ 0.5% of the corpus. Variant facets share the y-axis; spread within a type indicates how heterogeneous its content is."
-tar_read(viz_type_score_box_fig)
-```
-
-# Top / bottom matches per variant
-
-Sanity check: do the highest-scoring works read as on-topic, and the lowest as
-off-topic? If not, either the embedding model isn't capturing the topic, the
-keypaper set is too narrow, or the search-term filter let in noise.
-
-```{r}
-#| label: tbl-top-bottom
-#| results: asis
-tb <- tar_read(viz_top_bottom)
-for (v in names(tb)) {
-  cat("##", v, "\n\n")
-  print(knitr::kable(tb[[v]]))
-  cat("\n\n")
-}
 ```
 
 # Variant agreement
@@ -286,41 +204,6 @@ poor quality.
 #| fig-cap: "Per-work max similarity to keypapers, plotted pair-wise across the three variants. Each corpus work contributes one point per pair (coloured). The dashed diagonal is perfect agreement; points off it are works the two variants disagree about. Click or box/lasso-select to highlight a work's points across all pairs."
 tar_read(viz_agree_fig)
 ```
-
-# Keypaper coherence
-
-How tight is the keypaper set itself? Pairwise cosine similarity between
-the keypapers (title_abstract variant), reordered by average-linkage
-hierarchical clustering. A coherent set shows clear high-similarity
-blocks on the diagonal; a scattered set shows a noisier matrix.
-
-```{r}
-#| label: fig-keypaper-self-sim
-#| fig-cap: "Pairwise cosine similarity between keypapers (title_abstract variant). Axis order is from hierarchical clustering (1 − cosine, average linkage). Block structure on the diagonal indicates topical sub-groups within the keypaper set."
-tar_read(viz_keypaper_self_sim_fig)
-```
-
-## Per-keypaper score distribution
-
-For each of the 105 keypapers, the distribution of cosine similarity
-across the whole corpus. A keypaper with a high median attracts many
-near matches (possibly too generic — "matches everything"); a keypaper
-with a low median is orphaned (the corpus has nothing close to it).
-Sorted by median, descending.
-
-```{r}
-#| label: fig-keypaper-score-dist
-
-htmltools::div(
-  style = "height: 3200px; overflow: visible;",
-  tar_read(viz_keypaper_score_dist_fig)
-)
-```
-
-*Per-keypaper score distribution (q05–q25–median–q75–q95). Keypapers at
-the top score high across the corpus (broad/generic concepts);
-keypapers at the bottom are orphans (their topic isn't
-well-represented in the corpus). Inputs to keypaper-set curation.*
 
 # Sanity check: embedding L2 norms
 

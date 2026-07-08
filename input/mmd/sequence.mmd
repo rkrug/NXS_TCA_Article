@@ -1,84 +1,58 @@
+
 sequenceDiagram
-  %% TCAC 2.0 - end-to-end pipeline sequence diagram.
-  %% Shows the players involved in a `tar_make()` run from corpus assembly
-  %% through embedding, BERTopic topics, and the report. Local (Path A) and
-  %% RunPod (Path B) variants are shown together via `alt` blocks.
   autonumber
 
-  actor       Orch    as Orchestrator (tar_make)
-  participant OA      as OpenAlex API
-  participant SS      as OpenAlex snapshot (local)
-  participant TEIloc  as Local TEI (SPECTER2)
-  participant TEIrp   as RunPod TEI (SPECTER2)
-  participant BTloc   as Local BERTopic (CPU)
-  participant BTrp    as RunPod BERTopic (cuml GPU)
-  participant R2      as Cloudflare R2
+  actor       Orch as "Orchestrator (tar_make)"
+  participant ZO   as "Zotero API"
+  participant OA   as "OpenAlex API"
+  participant SS   as "OpenAlex snapshot (local)"
+  participant TEI  as "RunPod TEI (SPECTER2)"
+  participant R2   as "Cloudflare R2"
+  participant BT   as "RunPod BERTopic (cuml GPU)"
 
   rect rgb(245,250,255)
-    note over Orch,SS: Stage 1 - Corpus assembly
-
-    Orch ->> OA:    search-term query count (get_count)
-    OA   -->> Orch: matching-works count
-
-    Orch ->> OA:    download IDs (get_tcac20_ids)
-    OA   -->> Orch: ID list
-
-    Orch ->> OA:    resolve keypaper DOIs (prepare_keypapers)
-    OA   -->> Orch: keypaper records
-
-    Orch ->> SS:    lookup_by_id(TCAC 2.0 IDs)
-    SS   -->> Orch: corpus records
+    note over Orch,SS: Stage 1 - Corpus assembly (per assessment: tca, nxs)
+    Orch ->> ZO:  download_zotero_assessment() (TCA public, NXS private)
+    ZO  -->> Orch: items + tags -> zotero/assessment=*/chapter=*
+    Orch ->> OA:  get_ids_from_dois() - resolve DOIs to OpenAlex ids
+    OA  -->> Orch: id list -> ids/assessment=*
+    Orch ->> SS:  get_corpus_from_snapshot(ids)
+    SS  -->> Orch: full records (+ Zotero fallback for unmatched)
+    note over Orch: -> corpus/assessment=*/chapter=*
   end
 
   rect rgb(255,250,235)
-    note over Orch,TEIrp: Stage 2 - Per-variant embedding (per source x variant leaf)
-
-    alt active_embedding = SPECTER2 (local)
-      Orch   ->> TEIloc: POST /embed (batched, concurrent)
-      TEIloc -->> Orch:  768-D float32 vectors
-    else active_embedding = SPECTER2_runpod
-      Orch  ->> TEIrp: POST /embed (batched, concurrent)
-      TEIrp -->> Orch: 768-D float32 vectors
-    end
-
-    Orch ->> Orch: duckdb COPY into 1 GB part-N.parquet chunks, write .embed_complete marker
+    note over Orch,TEI: Stage 2 - Embedding (per assessment x variant x chapter)
+    Orch ->> TEI: POST /embed (batched, concurrent) - corpus + keypapers
+    TEI -->> Orch: 768-D SPECTER2 vectors
+    Orch ->> Orch: duckdb COPY -> part-*.parquet, .embed_complete marker
   end
 
   rect rgb(240,255,245)
-    note over Orch,R2: Stage 3 - R2 sync (Phase 1, one-off and after re-embed)
-
-    Orch ->> R2: rclone sync embeddings to s3://tcac-2-0/embeddings/
-    R2   -->> Orch: 200 OK
-  end
-
-  rect rgb(250,240,255)
-    note over Orch,BTrp: Stage 4 - BERTopic clustering (dual-path)
-
-    alt Path A - topics_tcac20_local
-      Orch  ->> BTloc: spawn python run_bertopic_local.py
-      BTloc -->> BTloc: sample 200K, fit UMAP then HDBSCAN (CPU)
-      BTloc -->> BTloc: transfer remainder via approximate_predict
-      BTloc -->> BTloc: c-TF-IDF on per-topic docs
-      BTloc -->> Orch:  3 parquets in topics/bertopic=default_local/
-    else Path B - topics_tcac20_runpod
-      Orch ->> BTrp: ssh and scp small cfg.yaml
-      Orch ->> BTrp: exec run_bertopic_gpu.py with s3:// URIs
-      BTrp ->> R2:   duckdb httpfs read_parquet(s3://...)
-      R2   -->> BTrp: primary variant (streamed)
-      BTrp -->> BTrp: cuml UMAP then HDBSCAN fit (full corpus on GPU)
-      BTrp ->> R2:   duckdb httpfs read fallback variant (anti-join)
-      R2   -->> BTrp: fallback chunks
-      BTrp -->> BTrp: c-TF-IDF on per-topic docs
-      Orch ->> BTrp: rsync topic parquets back
-      BTrp -->> Orch: 3 parquets in topics/bertopic=default_runpod/
-    end
+    note over Orch,R2: Stage 3 - R2 sync
+    Orch ->> R2: rclone sync embeddings -> s3://nxs-tca-article/embeddings/
+    note over Orch,R2: corpus excludes No Chapter - keypapers always
+    R2  -->> Orch: 200 OK
   end
 
   rect rgb(255,245,245)
-    note over Orch: Stage 5 - Visualisation and report
+    note over Orch: Stage 4 - Keypaper scoring (local)
+    Orch ->> Orch: score_keypapers() - cosine corpus vs keypapers (per variant)
+    Orch ->> Orch: score_keypapers_combined() - per assessment/chapter (title_abstract + title fallback)
+  end
 
-    Orch ->> Orch: score_keypapers (cosine corpus vs keypapers)
-    Orch ->> Orch: viz_* data targets (UMAP coords, joins, summaries)
-    Orch ->> Orch: fig_* render targets (ggplot, plotly, DT widgets)
-    Orch ->> Orch: Quarto render TCAC 2.0 Vectorisation.qmd
+  rect rgb(250,240,255)
+    note over Orch,BT: Stage 5 - BERTopic clustering (RunPod)
+    Orch ->> BT: ssh + rsync cfg.yaml, exec run_bertopic_gpu.py [s3 URIs]
+    BT  ->> R2:  duckdb httpfs read_parquet(s3) - dedup by id
+    R2  -->> BT: corpus + fallback embeddings (streamed)
+    BT  -->> BT: cuml UMAP + HDBSCAN + c-TF-IDF
+    Orch ->> BT: rsync topic parquets back -> topics/...
+  end
+
+  rect rgb(245,245,255)
+    note over Orch: Stage 6 - Visualisation + reports
+    Orch ->> Orch: viz_* / tbl_* targets
+    Orch ->> Orch: render Embedding, Chapter Analysis, Topic Modelling reports
+    Orch ->> Orch: render index (NXS TCS Article Report) -> output/reports/
   end

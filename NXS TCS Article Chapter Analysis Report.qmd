@@ -32,6 +32,8 @@ execute:
 #| label: setup
 #| include: false
 library(targets)
+library(htmltools)
+library(knitr)
 ```
 
 This report measures **how similar the papers in each assessment chapter are to
@@ -104,3 +106,136 @@ otherwise the OpenAlex page.
 #| label: tbl-top-matches-combined
 tar_read(tbl_top_matches_combined)
 ```
+
+# Keypaper relevance across the corpus
+
+The sections above break similarity down by chapter. These look at the
+keypaper-similarity signal across the **whole corpus** (all works, per
+embedding variant) — context for reading the per-chapter results.
+
+For each corpus work, the **max** cosine similarity against any keypaper is the
+single most useful summary — "how close is this work to its nearest reference?"
+A well-calibrated embedding produces a bimodal distribution: relevant works
+pile up on the right, off-topic on the left.
+
+```{r}
+#| label: tbl-score-summary
+tar_read(viz_score_summary_tbl) |>
+  knitr::kable(
+    caption = "Summary statistics of the embeddings, split by source of embedding.",
+    format.args = list(big.mark = ",")
+  )
+```
+
+```{r}
+#| label: fig-score-dist
+#| fig-cap: "Distribution of max cosine similarity to keypapers, per variant. Higher = closer to nearest reference. A clear bimodal shape indicates the embedding separates topic-relevant from off-topic works."
+tar_read(viz_score_dist_fig)
+```
+
+```{r}
+#| label: fig-score-ecdf
+#| fig-cap: "Empirical CDF of max cosine similarity to nearest keypaper, per variant (subsample of 50,000 works per variant, seed = 13). Read horizontally: for any score threshold, the curves give the fraction of works at or below that score."
+tar_read(viz_score_ecdf_fig)
+```
+
+## Relevance threshold sweep
+
+How many corpus works count as "relevant" as the similarity threshold rises —
+useful for picking a cut-off when filtering to keypaper-relevant works.
+
+```{r}
+#| label: fig-threshold
+#| fig-cap: "Number (and fraction) of corpus works with max keypaper similarity at or above each threshold, per variant. A gentle slope means the cut-off choice matters little; a cliff marks a natural relevance boundary."
+tar_read(viz_threshold_fig)
+```
+
+## Score vs publication year
+
+Does similarity to keypapers correlate with how recent a work is? A strong bias
+either way suggests the keypaper set is anchored to a particular era.
+
+```{r}
+#| label: fig-score-year
+#| fig-cap: "2D histogram of max cosine similarity (y) against publication year (x), per variant. Log-scale fill reveals the tail; uniform vertical density at every year is the null-hypothesis appearance — no temporal bias."
+tar_read(viz_score_year_fig)
+```
+
+## Score vs citation count
+
+Are high-similarity works also highly cited? Topical relevance and citation
+impact are different signals — a strong correlation would suggest the embedding
+is picking up "prestige", not topic.
+
+```{r}
+#| label: fig-citation-score
+#| fig-cap: "2D histogram of max cosine similarity (y) against log10(cited_by_count + 1) (x), per variant. A horizontal band = no relationship (good); a diagonal would suggest the embedding co-varies with citation impact rather than topic."
+tar_read(viz_citation_score_fig)
+```
+
+## Score by work type
+
+Does the embedding score some OpenAlex work types (articles, reviews, book
+chapters, …) as more keypaper-relevant than others?
+
+```{r}
+#| label: fig-type-score-heatmap
+#| fig-cap: "Median max-similarity score per (type, variant), for types with ≥ 0.5% of the corpus. Cells annotated with `median (n=…)`. Types sorted by overall median."
+tar_read(viz_type_score_heatmap_fig)
+```
+
+```{r}
+#| label: fig-type-score-box
+#| fig-cap: "Score distribution per type, per variant. Boxes show q05–q25–median–q75–q95 (precomputed). Filtered to types with ≥ 0.5% of the corpus."
+tar_read(viz_type_score_box_fig)
+```
+
+## Top / bottom matches per variant
+
+Sanity check: do the highest-scoring works read as on-topic, and the lowest as
+off-topic? If not, either the embedding isn't capturing the topic or the
+keypaper set is too narrow.
+
+```{r}
+#| label: tbl-top-bottom
+#| results: asis
+tb <- tar_read(viz_top_bottom)
+for (v in names(tb)) {
+  cat("###", v, "\n\n")
+  print(knitr::kable(tb[[v]]))
+  cat("\n\n")
+}
+```
+
+# Keypaper set
+
+## Keypaper coherence
+
+How tight is the keypaper set itself? Pairwise cosine similarity between the
+keypapers (title_abstract variant), reordered by average-linkage hierarchical
+clustering. A coherent set shows clear high-similarity blocks on the diagonal.
+
+```{r}
+#| label: fig-keypaper-self-sim
+#| fig-cap: "Pairwise cosine similarity between keypapers (title_abstract variant). Axis order is from hierarchical clustering (1 − cosine, average linkage). Block structure on the diagonal indicates topical sub-groups within the keypaper set."
+tar_read(viz_keypaper_self_sim_fig)
+```
+
+## Per-keypaper score distribution
+
+For each of the 62 keypapers, the distribution of cosine similarity across the
+whole corpus. A high median = the keypaper attracts many near matches (possibly
+too generic); a low median = orphaned (the corpus has nothing close). Sorted by
+median, descending.
+
+```{r}
+#| label: fig-keypaper-score-dist
+htmltools::div(
+  style = "height: 3200px; overflow: visible;",
+  tar_read(viz_keypaper_score_dist_fig)
+)
+```
+
+*Per-keypaper score distribution (q05–q25–median–q75–q95). Top = high across the
+corpus (broad/generic concepts); bottom = orphans (topic not well-represented).
+Inputs to keypaper-set curation.*

@@ -36,15 +36,21 @@ if (is.null(emb_cfg_full)) {
 # fresh from config.yaml at runtime. Only value-affecting fields (model,
 # sep_token, title_cap_combined, pilot_n) remain tracked in emb_cfg.
 emb_volatile <- c(
-  "host", "port", "scheme", "auth_token_keyring",
-  "batch_size", "max_batch_size", "concurrency",
-  "max_batch_tokens", "max_concurrent"
+  "host",
+  "port",
+  "scheme",
+  "auth_token_keyring",
+  "batch_size",
+  "max_batch_size",
+  "concurrency",
+  "max_batch_tokens",
+  "max_concurrent"
 )
 emb_cfg <- emb_cfg_full[setdiff(names(emb_cfg_full), emb_volatile)]
 # Zotero download inputs — pinned so unrelated config.yaml edits don't
 # re-trigger the (slow) group downloads.
-zotero_tca_id  <- cfg$zotero$assessments$tca$id
-zotero_nxs_id  <- cfg$zotero$assessments$nxs$id
+zotero_tca_id <- cfg$zotero$assessments$tca$id
+zotero_nxs_id <- cfg$zotero$assessments$nxs$id
 zotero_keyring <- cfg$zotero$api_key_keyring
 # Config names baked into the rendered report filenames. tar_quarto's
 # output_file is evaluated eagerly at pipeline-construction time, so these must
@@ -74,6 +80,18 @@ list(
   tar_target(
     kd_raw_fn,
     "input/key papers/TCA and Nexus Definitions.csv",
+    format = "file"
+  ),
+
+  # Mermaid pipeline diagrams. File targets so editing a diagram re-renders
+  # downstream. `mmd_figs` renders every .mmd to SVG + PNG (mermaid-cli, so
+  # elk layout + themes work) under output/figures/mmd/; the index report
+  # embeds the SVGs.
+  tar_target(mmd_pipeline, "input/mmd/pipeline.mmd", format = "file"),
+  tar_target(mmd_sequence, "input/mmd/sequence.mmd", format = "file"),
+  tar_target(
+    mmd_figs,
+    render_mmd(c(mmd_pipeline, mmd_sequence), out_dir = "output/figures/mmd"),
     format = "file"
   ),
 
@@ -184,7 +202,10 @@ list(
     pilot_corpus_tca,
     make_pilot_subset(
       corpus_path = corpus_tca,
-      out_dir = file.path("output/NXS_TCA_corpus", paste0("pilot_tca_n", emb_cfg$pilot_n)),
+      out_dir = file.path(
+        "output/NXS_TCA_corpus",
+        paste0("pilot_tca_n", emb_cfg$pilot_n)
+      ),
       n = emb_cfg$pilot_n
     ),
     format = "file"
@@ -193,7 +214,10 @@ list(
     pilot_corpus_nxs,
     make_pilot_subset(
       corpus_path = corpus_nxs,
-      out_dir = file.path("output/NXS_TCA_corpus", paste0("pilot_nxs_n", emb_cfg$pilot_n)),
+      out_dir = file.path(
+        "output/NXS_TCA_corpus",
+        paste0("pilot_nxs_n", emb_cfg$pilot_n)
+      ),
       n = emb_cfg$pilot_n
     ),
     format = "file"
@@ -433,24 +457,24 @@ list(
   tar_target(
     scores_combined,
     score_keypapers_combined(
-      corpus_ta_dir    = emb_corpus_title_abstract,
+      corpus_ta_dir = emb_corpus_title_abstract,
       corpus_title_dir = emb_corpus_title,
-      ref_ta_dir       = emb_keypapers_title_abstract,
-      ref_title_dir    = emb_keypapers_title,
-      out_dir          = "output/NXS_TCA_corpus/scores_combined",
-      fallback_ref     = "title"
+      ref_ta_dir = emb_keypapers_title_abstract,
+      ref_title_dir = emb_keypapers_title,
+      out_dir = "output/NXS_TCA_corpus/scores_combined",
+      fallback_ref = "title"
     ),
     format = "file"
   ),
   tar_target(
     scores_combined_ta_ref,
     score_keypapers_combined(
-      corpus_ta_dir    = emb_corpus_title_abstract,
+      corpus_ta_dir = emb_corpus_title_abstract,
       corpus_title_dir = emb_corpus_title,
-      ref_ta_dir       = emb_keypapers_title_abstract,
-      ref_title_dir    = emb_keypapers_title,
-      out_dir          = "output/NXS_TCA_corpus/scores_combined_ta_ref",
-      fallback_ref     = "title_abstract"
+      ref_ta_dir = emb_keypapers_title_abstract,
+      ref_title_dir = emb_keypapers_title,
+      out_dir = "output/NXS_TCA_corpus/scores_combined_ta_ref",
+      fallback_ref = "title_abstract"
     ),
     format = "file"
   ),
@@ -621,21 +645,26 @@ list(
     ),
     format = qs2_format()
   ),
-  tar_target(
-    viz_metadata,
-    viz_metadata_table(emb_corpus_title),
-    format = qs2_format()
-  ),
+  # viz_metadata: orphaned — the Embedding report builds the
+  # config × source × variant table inline (its own chunk), not via this
+  # target. Commented out (builder viz_metadata_table() kept in R/).
+  # tar_target(
+  #   viz_metadata,
+  #   viz_metadata_table(emb_corpus_title),
+  #   format = qs2_format()
+  # ),
   tar_target(
     viz_score_summary_tbl,
     viz_score_summary(viz_scores_long),
     format = qs2_format()
   ),
-  tar_target(
-    viz_score_quantiles_tbl,
-    viz_score_quantiles(viz_scores_long),
-    format = qs2_format()
-  ),
+  # viz_score_quantiles_tbl: orphaned — redundant with viz_score_summary_tbl
+  # (in the Chapter Analysis report), which already reports the same quantiles.
+  # tar_target(
+  #   viz_score_quantiles_tbl,
+  #   viz_score_quantiles(viz_scores_long),
+  #   format = qs2_format()
+  # ),
   tar_target(
     viz_score_dist_data,
     build_viz_score_dist_data(viz_scores_long),
@@ -704,7 +733,8 @@ list(
   tar_target(
     viz_chapter_cliffs_delta_fig,
     build_viz_chapter_cliffs_delta_fig(
-      viz_chapter_cliffs_delta_data, viz_chapter_alignment_data
+      viz_chapter_cliffs_delta_data,
+      viz_chapter_alignment_data
     ),
     format = qs2_format()
   ),
@@ -921,10 +951,12 @@ list(
   # Render the embeddings report. Re-builds whenever any score parquet,
   # the embeddings dataset, or the .qmd itself changes.
   tarchetypes::tar_quarto(
-    report_embeddings_render,
+    render_report_embeddings,
     path = "NXS TCS Article Embedding Report.qmd",
     output_file = paste0(
-      "NXS TCS Article Embedding Report - ", emb_name, ".html"
+      "NXS TCS Article Embedding Report - ",
+      emb_name,
+      ".html"
     ),
     quiet = TRUE
   ),
@@ -933,21 +965,36 @@ list(
   # targets (corpus, key_works, topics_runpod, ...) or the
   # .qmd itself changes.
   tarchetypes::tar_quarto(
-    report_topic_modelling_render,
+    render_report_topic_modelling,
     path = "NXS TCS Article Topic Modelling Report.qmd",
     output_file = paste0(
-      "NXS TCS Article Topic Modelling Report - ", bertopic_viz_name, ".html"
+      "NXS TCS Article Topic Modelling Report - ",
+      bertopic_viz_name,
+      ".html"
     ),
     quiet = TRUE
   ),
 
   # Render the Chapter Analysis Report (chapter <-> keypaper similarity).
   tarchetypes::tar_quarto(
-    report_analysis_render,
+    render_report_analysis,
     path = "NXS TCS Article Chapter Analysis Report.qmd",
     output_file = paste0(
-      "NXS TCS Article Chapter Analysis Report - ", emb_name, ".html"
+      "NXS TCS Article Chapter Analysis Report - ",
+      emb_name,
+      ".html"
     ),
+    quiet = TRUE
+  ),
+
+  # Top-level index: intro + links to the three reports. Depends only on
+  # config_file (via tar_read in the .qmd) — a lightweight landing page that
+  # does NOT force-build the heavy / pod-dependent reports; its links resolve
+  # once each report is rendered into output/reports/.
+  tarchetypes::tar_quarto(
+    render_report_index,
+    path = "NXS TCS Article Report.qmd",
+    output_file = "NXS TCS Article Report.html",
     quiet = TRUE
   ),
 
@@ -961,11 +1008,16 @@ list(
   tar_target(
     report_embeddings,
     {
-      src <- report_embeddings_render[grepl("\\.html$", report_embeddings_render)]
+      src <- render_report_embeddings[grepl(
+        "\\.html$",
+        render_report_embeddings
+      )]
       if (length(src) != 1) {
-        stop("Expected exactly one rendered .html among ",
-             "report_embeddings_render's tracked files, got: ",
-             paste(report_embeddings_render, collapse = ", "))
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_report_embeddings's tracked files, got: ",
+          paste(render_report_embeddings, collapse = ", ")
+        )
       }
       dest_dir <- "output/reports"
       dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
@@ -980,11 +1032,16 @@ list(
   tar_target(
     report_topic_modelling,
     {
-      src <- report_topic_modelling_render[grepl("\\.html$", report_topic_modelling_render)]
+      src <- render_report_topic_modelling[grepl(
+        "\\.html$",
+        render_report_topic_modelling
+      )]
       if (length(src) != 1) {
-        stop("Expected exactly one rendered .html among ",
-             "report_topic_modelling_render's tracked files, got: ",
-             paste(report_topic_modelling_render, collapse = ", "))
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_report_topic_modelling's tracked files, got: ",
+          paste(render_report_topic_modelling, collapse = ", ")
+        )
       }
       dest_dir <- "output/reports"
       dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
@@ -999,15 +1056,38 @@ list(
   tar_target(
     report_analysis,
     {
-      src <- report_analysis_render[grepl("\\.html$", report_analysis_render)]
+      src <- render_report_analysis[grepl("\\.html$", render_report_analysis)]
       if (length(src) != 1) {
-        stop("Expected exactly one rendered .html among ",
-             "report_analysis_render's tracked files, got: ",
-             paste(report_analysis_render, collapse = ", "))
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_report_analysis's tracked files, got: ",
+          paste(render_report_analysis, collapse = ", ")
+        )
       }
       dest_dir <- "output/reports"
       dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
       dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
+      dest
+    },
+    format = "file"
+  ),
+  tar_target(
+    report_index,
+    {
+      src <- render_report_index[grepl("\\.html$", render_report_index)]
+      if (length(src) != 1) {
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_report_index's tracked files, got: ",
+          paste(render_report_index, collapse = ", ")
+        )
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, "index.html") # basename(src))
       if (!file.copy(src, dest, overwrite = TRUE)) {
         stop("Could not copy ", src, " to ", dest)
       }

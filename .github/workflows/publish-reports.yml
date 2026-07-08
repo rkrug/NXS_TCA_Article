@@ -1,0 +1,51 @@
+name: Publish reports to GitHub Pages
+
+# Publishes the pre-rendered HTML reports in output/reports/ to the gh-pages
+# branch. The reports themselves cannot be rendered in CI (they need the full
+# data pipeline + a GPU pod), so this workflow only deploys what has been
+# rendered locally and committed under output/reports/.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "output/reports/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-reports
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site
+          # Copy the rendered reports (self-contained HTML; no _files sidecars).
+          cp -a output/reports/. _site/
+          # gh-pages entry point: the landing/index report.
+          if [ -f "_site/NXS TCS Article Report.html" ]; then
+            cp "_site/NXS TCS Article Report.html" _site/index.html
+          else
+            echo "::warning::index report not found in output/reports/"
+          fi
+          # Serve filenames with spaces/underscores verbatim (no Jekyll).
+          touch _site/.nojekyll
+          ls -la _site
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          publish_branch: gh-pages

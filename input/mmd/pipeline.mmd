@@ -1,220 +1,136 @@
 ---
 config:
+  theme: neutral
   layout: elk
   elk:
     nodePlacementStrategy: BRANDES_KOEPF
 ---
+
+%% NXS TCS Article — end-to-end targets pipeline (flowchart).
+%% Classic Mermaid syntax (no elk / no v11 @{shape}) so it renders both
+%% standalone and embedded in the index report via Quarto's mermaid.
+
 flowchart TD
 
-  %% Configuration
-  config_file@{ shape: doc, label: "Configuration<br/><tt>config.yaml</tt>" }
+  config["Configuration<br/><tt>input/config.yaml</tt>"]
 
-  %% =====================================================================
-  %% OpenAlex / corpus assembly
-  %% =====================================================================
-  subgraph oa["OpenAlex corpus assembly"]
+  %% ===================================================================
+  subgraph corpus_asm["Corpus assembly (Zotero → OpenAlex)"]
     direction TB
 
-    %% Inputs
-    tfc_txt@{ shape: doc, label: "Transformative-change terms<br/><tt>input/search terms/tfc_TCAC_1.0.txt</tt>" }
-    nature_txt@{ shape: doc, label: "Nature terms<br/><tt>input/search terms/nature_TCAC_1.0.txt</tt>" }
-    types_csv@{ shape: doc, label: "OpenAlex work types (filter)<br/><tt>input/openalex_types.csv</tt>" }
-    keypapers_rds@{ shape: doc, label: "Key papers (DOIs)<br/><tt>input/key papers/key_papers_TCAC_1.0.rds</tt>" }
-    tcac10_ids_parquet@{ shape: doc, label: "TCAC 1.0 OpenAlex IDs<br/><tt>input/TCAC_1.0/ids.parquet</tt>" }
+    defs[/"TCA/Nexus definitions<br/><tt>input/key papers/TCA and Nexus Definitions.csv</tt>"/]
+    ztca(["Zotero TCA group<br/>(public, id 4589462)"])
+    znxs(["Zotero NXS group<br/>(private, keyring)"])
+    oa(["OpenAlex API"])
+    snap[("OpenAlex snapshot<br/><tt>input/snapshot/</tt> · RELEASE 2026-01-15")]
 
-    %% External services + the local snapshot (treated as a DB)
-    openalex_api@{ shape: cloud, label: "OpenAlex API" }
-    snapshot_db@{ shape: lin-cyl, label: "OpenAlex local snapshot<br/><tt>input/snapshot/</tt><br/>RELEASE 2026-01-15" }
+    prep["<tt>prepare_key_definitions()</tt>"]
+    dl["<tt>download_zotero_assessment()</tt> · nxs & tca"]
+    ids["<tt>get_ids_from_dois()</tt> · nxs & tca"]
+    corp["<tt>get_corpus_from_snapshot()</tt> · nxs & tca<br/>(+ Zotero fallback)"]
 
-    %% Processing targets
-    tfc_st@{ shape: rect, label: "Combine tfc + nature with AND<br/>(<tt>tfc_st</tt>, <tt>nature_st</tt>, <tt>tca_st</tt>)" }
-    count_st@{ shape: rect, label: "<tt>get_count()</tt><br/>matching-works count" }
-    get_tcac20_ids@{ shape: rect, label: "<tt>get_tcac20_ids()</tt><br/>OpenAlex IDs from search + type filter" }
-    prepare_keypapers@{ shape: rect, label: "<tt>prepare_keypapers()</tt><br/>resolve key paper DOIs" }
-    get_corpus_20@{ shape: rect, label: "<tt>get_corpus_from_snapshot()</tt><br/>TCAC 2.0 records" }
-    get_corpus_10@{ shape: rect, label: "<tt>get_corpus_from_snapshot()</tt><br/>TCAC 1.0 records" }
+    key_db[("<tt>key_works</tt><br/>keypaper/key_works.parquet")]
+    zdb[("zotero/assessment=*/chapter=*")]
+    iddb[("ids/assessment=*")]
+    corpus_db[("<tt>corpus</tt><br/>corpus/assessment=*/chapter=*")]
 
-    %% Output DBs
-    counts_db@{ shape: lin-cyl, label: "Counts<br/><tt>output/serch_strings/count.rds</tt>" }
-    tcac20_ids_db@{ shape: lin-cyl, label: "TCAC 2.0 IDs<br/><tt>output/TCAC_2.0_ids/</tt>" }
-    keyworks_db@{ shape: lin-cyl, label: "Key works (resolved)<br/><tt>output/keyworks/</tt>" }
-    corpus20_db@{ shape: lin-cyl, label: "TCAC 2.0 corpus<br/><tt>output/TCAC_2.0/corpus/</tt>" }
-    corpus10_db@{ shape: lin-cyl, label: "TCAC 1.0 corpus<br/><tt>output/TCAC_1.0/corpus/</tt>" }
-
-    %% Edges
-    tfc_txt --> tfc_st
-    nature_txt --> tfc_st
-    types_csv --> get_tcac20_ids
-
-    tfc_st --> count_st
-    openalex_api <--> count_st
-    count_st --> counts_db
-
-    tfc_st --> get_tcac20_ids
-    openalex_api <--> get_tcac20_ids
-    get_tcac20_ids --> tcac20_ids_db
-
-    keypapers_rds --> prepare_keypapers
-    openalex_api <--> prepare_keypapers
-    prepare_keypapers --> keyworks_db
-
-    tcac20_ids_db --> get_corpus_20
-    snapshot_db --> get_corpus_20
-    get_corpus_20 --> corpus20_db
-
-    tcac10_ids_parquet --> get_corpus_10
-    snapshot_db --> get_corpus_10
-    get_corpus_10 --> corpus10_db
+    defs --> prep --> key_db
+    ztca --> dl
+    znxs --> dl --> zdb
+    zdb --> ids
+    oa <--> ids
+    ids --> iddb
+    iddb --> corp
+    snap --> corp
+    zdb --> corp
+    corp --> corpus_db
   end
 
-  config_file --> oa
-
-  %% =====================================================================
-  %% Embeddings
-  %% =====================================================================
-  subgraph emb["Embeddings (per-variant)"]
+  %% ===================================================================
+  subgraph emb_stage["Embeddings (SPECTER2 via RunPod TEI)"]
     direction TB
 
-    %% External
-    tei_runpod@{ shape: cloud, label: "TEI inference server<br/>(SPECTER2 on RunPod)" }
+    tei(["RunPod TEI<br/>(SPECTER2)"])
+    embed["<tt>embed_works()</tt><br/>per assessment × variant × chapter"]
+    emb_corpus[("embeddings/…/source=corpus/<br/>variant=*/assessment=*/chapter=*")]
+    emb_kp[("embeddings/…/source=keypaper/variant=*")]
+    r2sync["<tt>sync_*_embeddings_to_r2()</tt><br/>corpus excludes 'No Chapter'"]
+    r2[("Cloudflare R2<br/>s3://nxs-tca-article/embeddings/")]
 
-    %% Processing
-    embed_works@{ shape: rect, label: "<tt>embed_works()</tt><br/>per-variant TEI batches +<br/>duckdb consolidation to ~1 GB parquets" }
-
-    %% Output DBs (per source × variant leaves)
-    emb_corpus_db@{ shape: lin-cyl, label: "Corpus embeddings<br/><tt>output/TCAC_2.0/embeddings/<br/>config=&lt;X&gt;/source=corpus/<br/>variant={title,abstract,title_abstract}/</tt>" }
-    emb_keypapers_db@{ shape: lin-cyl, label: "Keypaper embeddings<br/><tt>output/TCAC_2.0/embeddings/<br/>config=&lt;X&gt;/source=keypaper/<br/>variant={title,abstract,title_abstract}/</tt>" }
-
-    %% R2 mirror (Phase 1)
-    r2_emb@{ shape: lin-cyl, label: "Cloudflare R2 mirror<br/><tt>s3://tcac-2-0/embeddings/</tt>" }
-    rclone_sync@{ shape: rect, label: "<tt>scripts/sync_embeddings_to_r2.sh</tt><br/>rclone sync" }
-
-    %% Edges
-    corpus20_db --> embed_works
-    keyworks_db --> embed_works
-    tei_runpod <--> embed_works
-    embed_works --> emb_corpus_db
-    embed_works --> emb_keypapers_db
-
-    emb_corpus_db --> rclone_sync
-    emb_keypapers_db --> rclone_sync
-    rclone_sync --> r2_emb
+    corpus_db --> embed
+    key_db --> embed
+    tei <--> embed
+    embed --> emb_corpus
+    embed --> emb_kp
+    emb_corpus --> r2sync
+    emb_kp --> r2sync
+    r2sync --> r2
   end
 
-  config_file --> emb
-
-  %% =====================================================================
-  %% Topics
-  %% =====================================================================
-  subgraph topics["Topics (BERTopic — dual path)"]
+  %% ===================================================================
+  subgraph score_stage["Keypaper similarity"]
     direction TB
 
-    %% Path A — local
-    run_bertopic_local@{ shape: rect, label: "<tt>run_bertopic_local()</tt><br/>UMAP + HDBSCAN (CPU)<br/>200K sample fit + transfer" }
+    score["<tt>score_keypapers()</tt><br/>per variant"]
+    score_comb["<tt>score_keypapers_combined()</tt><br/>title_abstract + title fallback"]
+    scores_db[("scores/config=*/variant=*")]
+    scores_comb_db[("scores_combined[_ta_ref]/<br/>config=*/assessment=*/chapter=*")]
 
-    %% Path B — RunPod
-    bertopic_pod@{ shape: cloud, label: "BERTopic GPU pod<br/>(cuml UMAP + HDBSCAN)" }
-    run_bertopic_runpod@{ shape: rect, label: "<tt>run_bertopic_runpod()</tt><br/>SSH orchestrator —<br/>pod reads embeddings from R2" }
-
-    %% Outputs
-    topics_local_db@{ shape: lin-cyl, label: "Path A topics<br/><tt>output/TCAC_2.0/topics/<br/>config=&lt;X&gt;/bertopic=default_local/<br/>variant=&lt;V&gt;/</tt>" }
-    topics_runpod_db@{ shape: lin-cyl, label: "Path B topics<br/><tt>output/TCAC_2.0/topics/<br/>config=&lt;X&gt;/bertopic=default_runpod/<br/>variant=&lt;V&gt;/</tt>" }
-
-    topics_alias@{ shape: rect, label: "<tt>topics_tcac20</tt> alias<br/>picks active_for_viz" }
-
-    %% Edges
-    emb_corpus_db --> run_bertopic_local
-    emb_keypapers_db --> run_bertopic_local
-    run_bertopic_local --> topics_local_db
-
-    r2_emb --> bertopic_pod
-    bertopic_pod <--> run_bertopic_runpod
-    run_bertopic_runpod --> topics_runpod_db
-
-    topics_local_db --> topics_alias
-    topics_runpod_db --> topics_alias
+    emb_corpus --> score --> scores_db
+    emb_kp --> score
+    emb_corpus --> score_comb --> scores_comb_db
+    emb_kp --> score_comb
   end
 
-  config_file --> topics
-
-  %% =====================================================================
-  %% Visualisation + report
-  %% =====================================================================
-  %% Two-layer split: viz_* targets prepare data (joins, tables, UMAP
-  %% coords, summaries — qs2-serialised by targets), fig_* targets
-  %% consume that data and return rendered figure objects (ggplot /
-  %% plotly / DT widget). Report just composes the fig_* outputs.
-  subgraph figs["Visualisation + report"]
+  %% ===================================================================
+  subgraph topic_stage["Topic modelling (BERTopic, RunPod GPU)"]
     direction TB
 
-    %% Scoring (feeds viz_*)
-    score_keypapers@{ shape: rect, label: "<tt>score_keypapers()</tt><br/>cosine similarity corpus ↔ keypapers" }
-    scores_db@{ shape: lin-cyl, label: "Keypaper scores<br/><tt>output/TCAC_2.0/scores/</tt>" }
+    pod(["RunPod BERTopic pod<br/>(cuml UMAP + HDBSCAN)"])
+    bertopic["<tt>run_bertopic_runpod()</tt><br/>pod reads embeddings from R2"]
+    topics_db[("topics/config=*/bertopic=*/variant=*")]
 
-    %% Data layer
-    viz_embeddings@{ shape: rect, label: "<tt>viz_embeddings</tt><br/>variant-merged corpus + keypaper" }
-    viz_scores_long@{ shape: rect, label: "<tt>viz_scores_long</tt><br/>tidy scores across variants" }
-    viz_umap_join@{ shape: rect, label: "<tt>viz_umap_join</tt><br/>2D UMAP coords + scores" }
-    viz_topics_tbl_data@{ shape: rect, label: "<tt>viz_topics_tbl_data</tt><br/>topic ↔ keypaper table" }
-
-    %% Figure layer (currently named viz_* in code; rename to fig_*)
-    fig_umap@{ shape: rect, label: "<tt>fig_umap</tt><br/>UMAP scatter + contour + keypapers" }
-    fig_topics@{ shape: rect, label: "<tt>fig_topics</tt><br/>topic scatter (BERTopic clusters)" }
-    fig_topics_tbl@{ shape: rect, label: "<tt>fig_topics_tbl</tt><br/>DT widget for the report" }
-    fig_scores@{ shape: rect, label: "<tt>fig_score_dist</tt> / <tt>fig_threshold</tt><br/>score distribution + threshold sweep" }
-    fig_agree@{ shape: rect, label: "<tt>fig_variant_agree</tt><br/>cross-variant agreement" }
-
-    %% Render
-    report@{ shape: rect, label: "Quarto render<br/><tt>TCAC 2.0 Building.qmd</tt>" }
-    figures_db@{ shape: lin-cyl, label: "Figure artifacts<br/><tt>output/figures/</tt>" }
-    report_html@{ shape: doc, label: "<tt>TCAC 2.0 Building.html</tt>" }
-
-    %% Scoring edges
-    emb_corpus_db --> score_keypapers
-    emb_keypapers_db --> score_keypapers
-    score_keypapers --> scores_db
-
-    %% Data-layer edges
-    emb_corpus_db --> viz_embeddings
-    emb_keypapers_db --> viz_embeddings
-    scores_db --> viz_scores_long
-    viz_embeddings --> viz_umap_join
-    viz_scores_long --> viz_umap_join
-    topics_alias --> viz_topics_tbl_data
-    viz_embeddings --> viz_topics_tbl_data
-
-    %% Figure-layer edges (viz_* data -> fig_* renders)
-    viz_umap_join --> fig_umap
-    viz_umap_join --> fig_topics
-    viz_topics_tbl_data --> fig_topics_tbl
-    viz_scores_long --> fig_scores
-    viz_scores_long --> fig_agree
-
-    %% Render edges
-    fig_umap --> report
-    fig_topics --> report
-    fig_topics_tbl --> report
-    fig_scores --> report
-    fig_agree --> report
-    fig_umap --> figures_db
-    fig_topics --> figures_db
-    fig_scores --> figures_db
-    fig_agree --> figures_db
-    report --> report_html
+    r2 --> pod
+    pod <--> bertopic
+    bertopic --> topics_db
   end
 
-  config_file --> figs
+  %% ===================================================================
+  subgraph report_stage["Visualisation + reports (output/reports/)"]
+    direction TB
 
-  %% =====================================================================
-  %% Styles
-  %% =====================================================================
-  classDef input_file  fill:#dbeafe,stroke:#2563eb,color:#1e3a8a,stroke-width:1.5px;
-  classDef config      fill:#ecfccb,stroke:#65a30d,color:#14532d,stroke-width:1px;
-  classDef database    fill:#fff3b0,stroke:#b45309,color:#111827,stroke-width:1.5px;
-  classDef processing  fill:#bbf7d0,stroke:#16a34a,color:#14532d,stroke-width:1px;
-  classDef helper      fill:#e0f2fe,stroke:#0284c7,color:#0f172a,stroke-width:1px;
+    viz["viz_* / tbl_* targets<br/>(figures, tables, widgets)"]
+    r_emb["Embedding Report<br/>(QC)"]
+    r_ana["Chapter Analysis Report<br/>(chapter ↔ keypaper)"]
+    r_top["Topic Modelling Report"]
+    r_idx["Index — NXS TCS Article Report<br/>(intro + links + diagrams)"]
 
-  class config_file,tfc_txt,nature_txt,types_csv,keypapers_rds,tcac10_ids_parquet,report_html input_file;
-  class counts_db,tcac20_ids_db,keyworks_db,corpus20_db,corpus10_db,snapshot_db,emb_corpus_db,emb_keypapers_db,r2_emb,topics_local_db,topics_runpod_db,scores_db,figures_db database;
-  class tfc_st,count_st,get_tcac20_ids,prepare_keypapers,get_corpus_20,get_corpus_10,embed_works,rclone_sync,run_bertopic_local,run_bertopic_runpod,topics_alias,score_keypapers,viz_embeddings,viz_scores_long,viz_umap_join,viz_topics_tbl_data,fig_umap,fig_topics,fig_topics_tbl,fig_scores,fig_agree,report processing;
-  class openalex_api,tei_runpod,bertopic_pod helper;
+    scores_db --> viz
+    scores_comb_db --> viz
+    topics_db --> viz
+    corpus_db --> viz
+    key_db --> viz
+    viz --> r_emb
+    viz --> r_ana
+    viz --> r_top
+    r_emb --> r_idx
+    r_ana --> r_idx
+    r_top --> r_idx
+  end
+
+  config --> corpus_asm
+  config --> emb_stage
+  config --> topic_stage
+
+  %% ===================================================================
+  classDef input fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+  classDef config fill:#ecfccb,stroke:#65a30d,color:#14532d;
+  classDef db fill:#fff3b0,stroke:#b45309,color:#111827;
+  classDef proc fill:#bbf7d0,stroke:#16a34a,color:#14532d;
+  classDef svc fill:#e0f2fe,stroke:#0284c7,color:#0f172a;
+
+  class config config;
+  class defs input;
+  class ztca,znxs,oa,snap,tei,r2,pod svc;
+  class key_db,zdb,iddb,corpus_db,emb_corpus,emb_kp,scores_db,scores_comb_db,topics_db db;
+  class prep,dl,dl,ids,ids,corp,corp,embed,r2sync,score,score_comb,bertopic,viz,r_emb,r_ana,r_top,r_idx proc;
