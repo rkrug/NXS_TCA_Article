@@ -137,3 +137,8 @@ scripts/runpod/hosts.generated.yaml
 # Python bytecode cache (from py_compile / local runs of run_bertopic_gpu.py)
 __pycache__/
 *.pyc
+NXS TCS Article Chapter Analysis Report - SPECTER2_runpod.html
+NXS TCS Article Corpus Report.qmd.bak
+NXS TCS Article Embedding Report - SPECTER2_runpod.html
+NXS TCS Article Report.html
+NXS TCS Article Topic Modelling Report - runpod_v5_supervised.html
