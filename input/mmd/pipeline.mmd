@@ -7,34 +7,50 @@ config:
 ---
 
 %% NXS TCS Article — end-to-end targets pipeline (flowchart).
-%% Classic Mermaid syntax (no elk / no v11 @{shape}) so it renders both
-%% standalone and embedded in the index report via Quarto's mermaid.
+%% Keypapers = the TCA/Nexus concept definitions (4 worksheets). Their inline
+%% citations are extracted and resolved to a cited `corpus`; the former
+%% assessment corpus is now `corpus_chapter`. Topic modelling is disabled.
 
 flowchart TD
 
   config["Configuration<br/><tt>input/config.yaml</tt>"]
 
   %% ===================================================================
+  subgraph kp_asm["Keypapers + citations (from the definitions .xlsx)"]
+    direction TB
+
+    defs[/"TCA/Nexus definitions · 4 sheets<br/><tt>input/TCA and Nexus Definitions-1.xlsx</tt>"/]
+    prep["<tt>prepare_key_definitions()</tt><br/>unified schema, citations stripped"]
+    key_db[("<tt>key_works</tt><br/>keypaper/keyset=*")]
+    extract["<tt>extract_definition_citations()</tt><br/>regex (author, year)"]
+    cite_ex[("<tt>key_citations</tt><br/>citations/extracted")]
+    resolve["<tt>resolve_citations()</tt><br/>strict + loose, matching assessment"]
+    cite_rs[("<tt>citations_resolved</tt><br/>citations/resolved<br/>(unmatched kept)")]
+
+    defs --> prep --> key_db
+    key_db --> extract --> cite_ex
+    cite_ex --> resolve --> cite_rs
+  end
+
+  %% ===================================================================
   subgraph corpus_asm["Corpus assembly (Zotero → OpenAlex)"]
     direction TB
 
-    defs[/"TCA/Nexus definitions<br/><tt>input/key papers/TCA and Nexus Definitions.csv</tt>"/]
     ztca(["Zotero TCA group<br/>(public, id 4589462)"])
     znxs(["Zotero NXS group<br/>(private, keyring)"])
     oa(["OpenAlex API"])
     snap[("OpenAlex snapshot<br/><tt>input/snapshot/</tt> · RELEASE 2026-01-15")]
 
-    prep["<tt>prepare_key_definitions()</tt>"]
     dl["<tt>download_zotero_assessment()</tt> · nxs & tca"]
     ids["<tt>get_ids_from_dois()</tt> · nxs & tca"]
-    corp["<tt>get_corpus_from_snapshot()</tt> · nxs & tca<br/>(+ Zotero fallback)"]
+    corp["<tt>get_corpus_from_snapshot()</tt><br/>(+ Zotero fallback)"]
+    build_cc["<tt>build_cited_corpus()</tt><br/>cited works = subset of corpus_chapter"]
 
-    key_db[("<tt>key_works</tt><br/>keypaper/key_works.parquet")]
     zdb[("zotero/assessment=*/chapter=*")]
     iddb[("ids/assessment=*")]
-    corpus_db[("<tt>corpus</tt><br/>corpus/assessment=*/chapter=*")]
+    corpus_chapter[("<tt>corpus_chapter</tt><br/>corpus_chapter/assessment=*/chapter=*")]
+    corpus_db[("<tt>corpus</tt> (cited)<br/>corpus/")]
 
-    defs --> prep --> key_db
     ztca --> dl
     znxs --> dl --> zdb
     zdb --> ids
@@ -43,84 +59,89 @@ flowchart TD
     iddb --> corp
     snap --> corp
     zdb --> corp
-    corp --> corpus_db
+    corp --> corpus_chapter
+    corpus_chapter --> build_cc
+    build_cc --> corpus_db
   end
 
+  cite_rs --> resolve
+  cite_rs --> build_cc
+
   %% ===================================================================
-  subgraph emb_stage["Embeddings (SPECTER2 via RunPod TEI)"]
+  subgraph emb_stage["Embeddings (SPECTER2 via RunPod TEI) — 3 sources"]
     direction TB
 
     tei(["RunPod TEI<br/>(SPECTER2)"])
-    embed["<tt>embed_works()</tt><br/>per assessment × variant × chapter"]
-    emb_corpus[("embeddings/…/source=corpus/<br/>variant=*/assessment=*/chapter=*")]
-    emb_kp[("embeddings/…/source=keypaper/variant=*")]
-    r2sync["<tt>sync_*_embeddings_to_r2()</tt><br/>corpus excludes 'No Chapter'"]
-    r2[("Cloudflare R2<br/>s3://nxs-tca-article/embeddings/")]
+    embed["<tt>embed_works()</tt><br/>corpus_chapter × variant × chapter + keypaper × keyset"]
+    derive["<tt>derive_source_embeddings()</tt><br/>filter corpus_chapter → cited (no re-embed)"]
 
-    corpus_db --> embed
+    emb_cc[("embeddings/…/source=corpus_chapter")]
+    emb_kp[("embeddings/…/source=keypaper/variant=*/keyset=*")]
+    emb_cited[("embeddings/…/source=corpus")]
+
+    corpus_chapter --> embed
     key_db --> embed
     tei <--> embed
-    embed --> emb_corpus
+    embed --> emb_cc
     embed --> emb_kp
-    emb_corpus --> r2sync
-    emb_kp --> r2sync
-    r2sync --> r2
+    emb_cc --> derive
+    corpus_db --> derive
+    derive --> emb_cited
   end
 
   %% ===================================================================
-  subgraph score_stage["Keypaper similarity"]
+  subgraph score_stage["Keypaper similarity (chapter ↔ keypaper)"]
     direction TB
 
-    score["<tt>score_keypapers()</tt><br/>per variant"]
+    score["<tt>score_keypapers()</tt> · per variant"]
     score_comb["<tt>score_keypapers_combined()</tt><br/>title_abstract + title fallback"]
     scores_db[("scores/config=*/variant=*")]
     scores_comb_db[("scores_combined[_ta_ref]/<br/>config=*/assessment=*/chapter=*")]
 
-    emb_corpus --> score --> scores_db
+    emb_cc --> score --> scores_db
     emb_kp --> score
-    emb_corpus --> score_comb --> scores_comb_db
+    emb_cc --> score_comb --> scores_comb_db
     emb_kp --> score_comb
   end
 
   %% ===================================================================
-  subgraph topic_stage["Topic modelling (BERTopic, RunPod GPU)"]
+  subgraph link_stage["Keyset linkage (keypaper ↔ keypaper, 3 stages)"]
     direction TB
 
-    pod(["RunPod BERTopic pod<br/>(cuml UMAP + HDBSCAN)"])
-    bertopic["<tt>run_bertopic_runpod()</tt><br/>pod reads embeddings from R2"]
-    topics_db[("topics/config=*/bertopic=*/variant=*")]
+    l1["Stage 1 · <tt>build_link_stage1_data()</tt><br/>definition-embedding cosine"]
+    l2["Stage 2 · <tt>build_link_stage2_data()</tt><br/>cited-literature overlap (Jaccard)"]
+    l3["Stage 3 · <tt>build_link_stage3_data()</tt><br/>cited-literature embedding (mean pairwise)"]
+    sankey["3 Sankeys + keyset×keyset matrices<br/>(TCA Action → Nexus Response Option)"]
 
-    r2 --> pod
-    pod <--> bertopic
-    bertopic --> topics_db
+    emb_kp --> l1 --> sankey
+    cite_rs --> l2 --> sankey
+    cite_rs --> l3
+    emb_cited --> l3 --> sankey
   end
 
   %% ===================================================================
   subgraph report_stage["Visualisation + reports (output/reports/)"]
     direction TB
 
-    viz["viz_* / tbl_* targets<br/>(figures, tables, widgets)"]
-    r_emb["Embedding Report<br/>(QC)"]
-    r_ana["Chapter Analysis Report<br/>(chapter ↔ keypaper)"]
-    r_top["Topic Modelling Report"]
-    r_idx["Index — NXS TCS Article Report<br/>(intro + links + diagrams)"]
+    viz["viz_* / tbl_* targets"]
+    r_emb["Embedding Report (QC + citation coverage)"]
+    r_ana["Chapter Analysis Report<br/>(chapter ↔ keypaper + keyset linkage)"]
+    r_idx["Index — NXS TCS Article Report"]
 
     scores_db --> viz
     scores_comb_db --> viz
-    topics_db --> viz
-    corpus_db --> viz
+    corpus_chapter --> viz
     key_db --> viz
+    sankey --> viz
     viz --> r_emb
     viz --> r_ana
-    viz --> r_top
     r_emb --> r_idx
     r_ana --> r_idx
-    r_top --> r_idx
   end
 
+  config --> kp_asm
   config --> corpus_asm
   config --> emb_stage
-  config --> topic_stage
 
   %% ===================================================================
   classDef input fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
@@ -131,6 +152,6 @@ flowchart TD
 
   class config config;
   class defs input;
-  class ztca,znxs,oa,snap,tei,r2,pod svc;
-  class key_db,zdb,iddb,corpus_db,emb_corpus,emb_kp,scores_db,scores_comb_db,topics_db db;
-  class prep,dl,dl,ids,ids,corp,corp,embed,r2sync,score,score_comb,bertopic,viz,r_emb,r_ana,r_top,r_idx proc;
+  class ztca,znxs,oa,snap,tei svc;
+  class key_db,cite_ex,cite_rs,zdb,iddb,corpus_chapter,corpus_db,emb_cc,emb_kp,emb_cited,scores_db,scores_comb_db db;
+  class prep,extract,resolve,dl,ids,corp,build_cc,embed,derive,score,score_comb,l1,l2,l3,sankey,viz,r_emb,r_ana,r_idx proc;

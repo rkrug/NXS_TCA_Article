@@ -1,0 +1,197 @@
+---
+title: "NXS TCS Article — Citation Method Comparison"
+subtitle: "Regex vs LLM (OpenRouter) identification of in-text citations in the definitions"
+author:
+  - name:
+      family: Krug
+      given: Rainer M.
+    id: rmk
+    orcid: 0000-0002-7490-0066
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(targets)
+library(dplyr)
+library(knitr)
+```
+
+The cited literature is discovered by **extracting in-text citations from the
+concept definitions** and resolving each to a work in the matching assessment's
+reference library. Two extraction methods run as parallel pipeline targets:
+
+- **regex** — a deterministic parser (`R/citation_regex.R`) matching
+  parenthetical and narrative `(Author, year)` forms.
+- **llm** — an OpenRouter chat model (`R/extract_definition_citations_llm.R`)
+  reading each definition and returning its citations as JSON.
+
+Both feed the *same* two-pass resolver, so the resolved tables are directly
+comparable. There is no hand-labelled ground truth, so "better" is judged by
+three complementary signals:
+
+1. **Volume** — how many citations each finds (a recall proxy).
+2. **Agreement** — citations found by *both* are high-confidence; method-only
+   citations are where the methods disagree.
+3. **Resolution rate** — the fraction of what each finds that resolves to a
+   real work in the assessment library (a precision proxy: a hallucinated or
+   mis-parsed citation is unlikely to resolve).
+
+# Headline metrics
+
+```{r}
+#| label: tbl-summary
+tar_read(viz_citation_summary_tbl) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = paste(
+      "Per method: total citation tokens extracted, how many resolved",
+      "(strict / loose), resolution %, and distinct works cited. Higher",
+      "resolution % suggests cleaner extraction; more distinct works = wider",
+      "cited-literature coverage."
+    )
+  )
+```
+
+Read this together: the method with **more citations *and* a comparable or
+higher resolution %** is finding more real citations rather than noise. If one
+method extracts many more but at a much lower resolution %, the extras are
+likely spurious (mis-parses or hallucinations that match nothing).
+
+# Agreement per keyset
+
+```{r}
+#| label: fig-overlap
+#| fig-cap: "Distinct (author, year) citations per keyset, split by whether they were found by both methods, regex only, or LLM only. A large 'both' block = the methods largely agree; large method-only blocks locate systematic differences (e.g. narrative citations, institutional authors)."
+tar_read(viz_citation_overlap_fig)
+```
+
+```{r}
+#| label: tbl-overlap
+tar_read(viz_citation_overlap_data) |>
+  tidyr::pivot_wider(names_from = agreement, values_from = n,
+                     values_fill = 0L) |>
+  dplyr::mutate(
+    total = rowSums(dplyr::across(dplyr::where(is.numeric))),
+    `agreement %` = round(100 * `both` / total, 1)
+  ) |>
+  knitr::kable(
+    format.args = list(big.mark = ","),
+    caption = "Citation agreement counts per keyset (both / regex only / llm only)."
+  )
+```
+
+# Citations to review: disagreements & unmatched
+
+Every citation worth a look — either the two methods **disagree** (found by only
+one), or it stayed **unmatched** (resolved by neither method that found it).
+Rows found by *both* methods *and* resolved are omitted (nothing to check).
+Columns: `found_by` (regex only / llm only / both), `resolved`, `pass`
+(strict / loose / unmatched), and the **actual citation text**. A method-only
+citation that doesn't resolve is the least trustworthy — a mis-parse (regex) or
+an over-eager pickup (LLM); one that does resolve is a genuine citation the
+other method missed. `both` + unmatched = a real citation neither library
+contains (often institutional authors, e.g. IUCN / UNFCCC) — the manual
+verification set. Searchable/sortable:
+
+```{css}
+/*| echo: false */
+/* Shrink the disagreement DT (the only DT in this report): header, body,
+   filter row and controls. */
+.dataTables_wrapper,
+table.dataTable,
+table.dataTable th,
+table.dataTable td,
+.dataTables_wrapper .dataTables_filter input {
+  font-size: 10px;
+  line-height: 1.2;
+}
+```
+
+```{r}
+#| label: tbl-review
+d <- tar_read(viz_citation_review)
+DT::datatable(
+  d,
+  rownames = FALSE,
+  filter = "top",
+  class = "compact stripe hover",
+  options = list(pageLength = 25, order = list(list(0, "asc"))),
+  caption = sprintf(
+    "%d citations to review (disagreements + unmatched): found_by, resolved, actual text.",
+    nrow(d)
+  )
+)
+```
+
+# Reading the verdict
+
+- If **both** dominates and resolution % is similar, the cheaper, deterministic
+  **regex** method is sufficient — keep `citations.active: regex`.
+- If the **LLM** finds materially more citations that *also* resolve at a
+  similar or higher rate (especially narrative citations regex misses),
+  consider switching `citations.active: llm` in `input/config.yaml`.
+- Method-only citations that **fail to resolve** are the least trustworthy —
+  weigh a method down if most of its extra finds are unmatched.
+
+# Appendix — how each method identifies citations
+
+```{r}
+#| label: load-methods
+#| include: false
+# Source the extractor code so the exact prompt / patterns are shown verbatim
+# (single source of truth — no risk of the report drifting from the code).
+source("R/citation_regex.R")
+source("R/extract_definition_citations_llm.R")
+llmc <- yaml::read_yaml("input/config.yaml")$citations$llm
+```
+
+## LLM prompt (OpenRouter)
+
+Each definition is sent to the model with the system prompt below (verbatim
+from `R/extract_definition_citations_llm.R`); the user message is just
+`TEXT:\n<definition>`, and the reply is parsed as JSON.
+
+```{r}
+#| label: llm-prompt
+#| echo: false
+#| results: asis
+cat(sprintf(
+  "**Model:** `%s` — temperature %s, timeout %ss, %s parallel workers.\n\n",
+  llmc$model, llmc$temperature, llmc$timeout, llmc$workers
+))
+cat("```\n", .LLM_CITE_PROMPT, "\n```\n", sep = "")
+```
+
+## Regex rules
+
+The regex extractor (`R/citation_regex.R`) has no prompt; it scans each
+definition for:
+
+- **Parenthetical** groups `( … )` that contain a year, split on `;` into
+  individual citations (e.g. `(Kabeer, 1999; Manlosa, 2022)` → two);
+- **Narrative** citations — `Surname (year)`, `Surname et al. (year)`,
+  `A & B (year)`.
+
+In both cases the first-author surname is normalised (lower-cased, diacritics
+folded, initials / "et al." dropped) into the `author_key` used for resolution.
+The year is matched with:
+
+```{r}
+#| label: regex-year
+#| echo: false
+#| results: asis
+cat("```\n", .CITE_YEAR, "\n```\n", sep = "")
+```

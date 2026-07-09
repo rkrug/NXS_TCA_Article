@@ -1103,7 +1103,7 @@ build_viz_chapter_keypaper_heatmap_data <- function(scores_combined, key_works) 
       .by = c(assessment, chapter, keypaper_id)
     )
   kp_meta <- arrow::open_dataset(key_works) |>
-    dplyr::select(id, title) |>
+    dplyr::select(id, title, keyset) |>
     dplyr::collect() |>
     dplyr::rename(keypaper_id = id, keypaper_title = title)
   long |> dplyr::left_join(kp_meta, by = "keypaper_id")
@@ -1149,6 +1149,134 @@ build_viz_chapter_keypaper_heatmap_fig <- function(
   p
 }
 
+# Interactive chapter x keypaper heatmap: same data/ordering as the static
+# figure, but with a keyset checkbox filter (161 keypaper rows is too long to
+# read at once; letting the reader isolate one or two keysets makes it
+# legible) and y labels truncated to 30 chars (full title still on hover).
+build_viz_chapter_keypaper_heatmap_interactive_fig <- function(
+  chapter_keypaper_heatmap,
+  figures_dir = "output/figures"
+) {
+  if (!requireNamespace("plotly", quietly = TRUE)) {
+    stop("Package 'plotly' is required.")
+  }
+  d <- chapter_keypaper_heatmap |>
+    dplyr::mutate(
+      col_lbl = paste0(assessment, " / ", chapter),
+      kp_title = ifelse(is.na(keypaper_title) | keypaper_title == "",
+                        keypaper_id, keypaper_title),
+      keyset = ifelse(is.na(keyset), "(unknown)", keyset)
+    )
+
+  # Row order: ascending overall median (matches the static figure, whose
+  # ggplot y-levels are also arranged ascending). Column order: descending
+  # overall median.
+  kp_order <- d |>
+    dplyr::summarise(
+      m = stats::median(median), .by = c(keypaper_id, kp_title, keyset)
+    ) |>
+    dplyr::arrange(m)
+  col_order <- d |>
+    dplyr::summarise(m = stats::median(median), .by = col_lbl) |>
+    dplyr::arrange(dplyr::desc(m)) |>
+    dplyr::pull(col_lbl)
+
+  n_kp <- nrow(kp_order)
+  n_col <- length(col_order)
+  kp_lbl <- substr(kp_order$kp_title, 1, 30)
+  kp_keyset <- kp_order$keyset
+  keysets <- sort(unique(kp_keyset))
+
+  dm <- matrix(NA_real_, n_kp, n_col,
+              dimnames = list(kp_order$keypaper_id, col_order))
+  dm[cbind(match(d$keypaper_id, kp_order$keypaper_id),
+          match(d$col_lbl, col_order))] <- d$median
+
+  x_idx <- seq_len(n_col) - 1L
+  y_idx <- seq_len(n_kp) - 1L
+  z_full <- lapply(seq_len(n_kp), function(i) as.numeric(dm[i, ]))
+
+  hover_title <- wrap_for_hover(kp_order$kp_title, width = 60)
+  txt <- outer(hover_title, col_order, function(a, b) paste0(a, "<br>", b))
+  txt <- matrix(sprintf("%s<br>median = %.3f", txt, dm), n_kp, n_col)
+  text_full <- lapply(seq_len(n_kp), function(i) as.character(txt[i, ]))
+
+  p <- plotly::plot_ly(
+    x = x_idx, y = y_idx,
+    z = z_full, text = text_full,
+    hovertemplate = "%{text}<extra></extra>",
+    type = "heatmap",
+    colorscale = "Viridis",
+    colorbar = list(title = "Median\nsimilarity")
+  ) |>
+    plotly::layout(
+      title = list(text = "Chapter × keypaper median similarity"),
+      xaxis = list(
+        title = "assessment / chapter", tickmode = "array",
+        tickvals = x_idx, ticktext = col_order, tickangle = 45
+      ),
+      yaxis = list(
+        title = "keypaper", tickmode = "array",
+        tickvals = y_idx, ticktext = kp_lbl, tickfont = list(size = 9)
+      ),
+      margin = list(l = 220, b = 140)
+    )
+
+  p <- htmlwidgets::onRender(
+    p,
+    "
+    function(el, x, data) {
+      var wrap = document.createElement('div');
+      wrap.style.marginBottom = '8px';
+      var lbl = document.createElement('span');
+      lbl.innerText = 'Keysets: ';
+      lbl.style.fontSize = '13px';
+      lbl.style.marginRight = '8px';
+      wrap.appendChild(lbl);
+
+      var boxes = {};
+      data.keysets.forEach(function(ks) {
+        var cbLabel = document.createElement('label');
+        cbLabel.style.fontSize = '13px';
+        cbLabel.style.marginRight = '14px';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.style.marginRight = '4px';
+        boxes[ks] = cb;
+        cbLabel.appendChild(cb);
+        cbLabel.appendChild(document.createTextNode(ks));
+        wrap.appendChild(cbLabel);
+      });
+      el.parentNode.insertBefore(wrap, el);
+
+      function update() {
+        var keepIdx = [];
+        for (var i = 0; i < data.keyset.length; i++) {
+          if (boxes[data.keyset[i]].checked) { keepIdx.push(i); }
+        }
+        var z = keepIdx.map(function(i) { return data.z[i]; });
+        var text = keepIdx.map(function(i) { return data.text[i]; });
+        var yidx = keepIdx.map(function(_, k) { return k; });
+        var ytext = keepIdx.map(function(i) { return data.ylabels[i]; });
+        Plotly.restyle(el, {z: [z], text: [text], y: [yidx]}, [0]);
+        Plotly.relayout(el, {'yaxis.tickvals': yidx, 'yaxis.ticktext': ytext});
+      }
+      Object.keys(boxes).forEach(function(ks) {
+        boxes[ks].addEventListener('change', update);
+      });
+    }
+    ",
+    data = list(
+      z = z_full, text = text_full, keyset = kp_keyset, ylabels = kp_lbl,
+      keysets = keysets
+    )
+  )
+
+  save_widget_html(p, "chapter_keypaper_heatmap_interactive", figures_dir)
+  p
+}
+
 # Pairwise Cliff's delta between every pair of assessment/chapter groups, on
 # each work's max cosine similarity to the nearest keypaper. Tells you which
 # chapters are *really* different (effect size, robust to the compressed
@@ -1177,31 +1305,51 @@ build_viz_chapter_cliffs_delta_data <- function(scores_combined) {
 
 build_viz_chapter_cliffs_delta_fig <- function(
   chapter_cliffs_delta,
-  chapter_alignment,   # for a meaningful row/col order (by median alignment)
   figures_dir = "output/figures"
 ) {
-  ord <- chapter_alignment |>
-    dplyr::mutate(grp = paste0(assessment, " / ", chapter)) |>
-    dplyr::arrange(dplyr::desc(median)) |>
-    dplyr::pull(grp)
+  # Natural order: assessment alphabetically (nxs before tca), then chapter
+  # number ascending, "No Chapter" last within its assessment — e.g.
+  # "nxs / Chapter 1", ..., "nxs / No Chapter", "tca / Chapter 1", ...,
+  # "tca / No Chapter".
+  gnames <- unique(chapter_cliffs_delta$a)
+  parts <- strsplit(gnames, " / ", fixed = TRUE)
+  grp_assessment <- vapply(parts, `[`, character(1), 1)
+  grp_chapter <- vapply(parts, `[`, character(1), 2)
+  chapter_num <- suppressWarnings(as.numeric(sub("^Chapter ", "", grp_chapter)))
+  chapter_num[is.na(chapter_num)] <- Inf # "No Chapter" sorts last
+  ord <- gnames[order(grp_assessment, chapter_num)]
+
+  # |delta| >= 0.147 = "small" effect or bigger (Romano et al. 2006); below
+  # that is considered negligible / noise-floor, not a real difference.
+  delta_threshold <- 0.147
   d <- chapter_cliffs_delta |>
     dplyr::mutate(
       a = factor(a, levels = rev(ord)),
       b = factor(b, levels = ord)
     )
+  d$real_diff <- abs(d$delta) >= delta_threshold
   p <- ggplot2::ggplot(d, ggplot2::aes(x = b, y = a, fill = delta)) +
-    ggplot2::geom_tile() +
+    ggplot2::geom_tile(
+      ggplot2::aes(color = real_diff, linewidth = real_diff)
+    ) +
     ggplot2::scale_fill_gradient2(
       name = "Cliff's δ\n(row vs col)",
       low = "#2166AC", mid = "white", high = "#B2182B",
       midpoint = 0, limits = c(-1, 1)
+    ) +
+    ggplot2::scale_color_manual(
+      values = c(`TRUE` = "black", `FALSE` = NA), guide = "none"
+    ) +
+    ggplot2::scale_linewidth_manual(
+      values = c(`TRUE` = 0.8, `FALSE` = 0.1), guide = "none"
     ) +
     ggplot2::labs(
       x = "chapter (column)", y = "chapter (row)",
       title = "Pairwise Cliff's δ between chapters",
       subtitle = paste0(
         "row vs column on max-keypaper-similarity: +1 = row's works all score ",
-        "higher, −1 = all lower, 0 = indistinguishable"
+        "higher, −1 = all lower, 0 = indistinguishable. Black border = |δ| >= ",
+        delta_threshold, " (real difference, not negligible)"
       )
     ) +
     ggplot2::theme_minimal(base_size = 9) +
@@ -1210,6 +1358,199 @@ build_viz_chapter_cliffs_delta_fig <- function(
       panel.grid = ggplot2::element_blank()
     )
   save_ggplot_png(p, "chapter_cliffs_delta", figures_dir, width = 10, height = 9)
+  p
+}
+
+# Like build_viz_chapter_cliffs_delta_data(), but keeps every "kind" the
+# per-work value can be: the collapsed `max_sim` (best keypaper match, as
+# above) AND, separately, each individual keypaper's raw similarity column
+# (no collapsing). Lets the interactive figure below switch between "which
+# chapters differ on their best match overall" and "which chapters differ on
+# their match to keypaper K specifically" without conflating the two.
+build_viz_chapter_cliffs_delta_interactive_data <- function(
+  scores_combined,
+  key_works
+) {
+  ds <- arrow::open_dataset(
+    scores_combined, factory_options = list(exclude_invalid_files = TRUE)
+  )
+  kp_cols <- setdiff(names(ds), c("id", "assessment", "chapter", "config"))
+  df <- ds |>
+    dplyr::select(dplyr::all_of(c("assessment", "chapter", kp_cols))) |>
+    dplyr::collect()
+  m <- as.matrix(df[, kp_cols, drop = FALSE])
+  df$max_sim <- apply(m, 1L, max, na.rm = TRUE)
+  df$grp <- paste0(df$assessment, " / ", normalize_chapter_label(df$chapter))
+
+  # Same natural order as the collapsed figure: nxs before tca, chapter number
+  # ascending, "No Chapter" last within each assessment.
+  gnames <- unique(df$grp)
+  parts <- strsplit(gnames, " / ", fixed = TRUE)
+  grp_assessment <- vapply(parts, `[`, character(1), 1)
+  grp_chapter <- vapply(parts, `[`, character(1), 2)
+  chapter_num <- suppressWarnings(as.numeric(sub("^Chapter ", "", grp_chapter)))
+  chapter_num[is.na(chapter_num)] <- Inf
+  ord <- gnames[order(grp_assessment, chapter_num)]
+
+  kp_meta <- arrow::open_dataset(key_works) |>
+    dplyr::select(id, title) |>
+    dplyr::collect()
+  label_of <- stats::setNames(
+    ifelse(is.na(kp_meta$title) | !nzchar(kp_meta$title), kp_meta$id,
+           substr(kp_meta$title, 1, 60)),
+    kp_meta$id
+  )
+
+  kinds <- c("max_sim", kp_cols)
+  kp_labels <- unname(label_of[kp_cols])
+  kp_labels[is.na(kp_labels)] <- kp_cols[is.na(kp_labels)]
+  kind_labels <- c("Max similarity (any keypaper)", paste0(kp_cols, " — ", kp_labels))
+
+  grid <- expand.grid(a = ord, b = ord, stringsAsFactors = FALSE)
+  by_kind <- lapply(kinds, function(kind) {
+    groups <- split(df[[kind]], df$grp)
+    grid$delta <- mapply(
+      function(a, b) .cliffs_delta(groups[[a]], groups[[b]]), grid$a, grid$b
+    )
+    grid
+  })
+  names(by_kind) <- kinds
+
+  list(
+    chapters = ord, kinds = kinds, kind_labels = kind_labels, by_kind = by_kind
+  )
+}
+
+# One plotly heatmap + a combobox selecting which "kind" (collapsed max_sim,
+# or one specific keypaper's raw similarity) the pairwise Cliff's δ is
+# computed on. Precomputes z/hover-text/significance-border shapes for every
+# kind up front (cheap: ~13x13 per kind) and swaps them client-side via
+# Plotly.restyle()/relayout() on <select> change — no server, one self
+# contained HTML file.
+build_viz_chapter_cliffs_delta_interactive_fig <- function(
+  chapter_cliffs_delta_interactive,
+  figures_dir = "output/figures"
+) {
+  if (!requireNamespace("plotly", quietly = TRUE)) {
+    stop("Package 'plotly' is required.")
+  }
+  d <- chapter_cliffs_delta_interactive
+  ord <- d$chapters
+  y_ord <- rev(ord) # top row = first chapter, matching the static figure
+  n <- length(ord)
+  x_idx <- seq_len(n) - 1L
+  y_idx <- seq_len(n) - 1L
+  delta_threshold <- 0.147 # "small" effect or bigger (Romano et al. 2006)
+
+  z_by_kind <- list()
+  text_by_kind <- list()
+  shapes_by_kind <- list()
+
+  for (kind in d$kinds) {
+    g <- d$by_kind[[kind]]
+    dm <- matrix(NA_real_, n, n, dimnames = list(ord, ord))
+    dm[cbind(match(g$a, ord), match(g$b, ord))] <- g$delta
+    zmat <- dm[y_ord, ord, drop = FALSE] # rows follow y_ord, cols follow ord
+
+    z_by_kind[[kind]] <- lapply(seq_len(n), function(i) as.numeric(zmat[i, ]))
+
+    lbl <- outer(y_ord, ord, function(a, b) paste0(a, " vs ", b))
+    txt <- matrix(sprintf("%s<br>δ = %.3f", lbl, zmat), n, n)
+    text_by_kind[[kind]] <- lapply(seq_len(n), function(i) as.character(txt[i, ]))
+
+    shapes <- list()
+    for (i in seq_len(n)) {
+      for (j in seq_len(n)) {
+        v <- zmat[i, j]
+        if (is.finite(v) && abs(v) >= delta_threshold) {
+          shapes[[length(shapes) + 1L]] <- list(
+            type = "rect", xref = "x", yref = "y",
+            x0 = j - 1 - 0.5, x1 = j - 1 + 0.5,
+            y0 = i - 1 - 0.5, y1 = i - 1 + 0.5,
+            line = list(color = "black", width = 1.5),
+            fillcolor = "rgba(0,0,0,0)"
+          )
+        }
+      }
+    }
+    shapes_by_kind[[kind]] <- shapes
+  }
+
+  init_kind <- "max_sim"
+  init_label <- d$kind_labels[d$kinds == init_kind]
+
+  p <- plotly::plot_ly(
+    x = x_idx, y = y_idx,
+    z = z_by_kind[[init_kind]],
+    text = text_by_kind[[init_kind]],
+    hovertemplate = "%{text}<extra></extra>",
+    type = "heatmap",
+    zmin = -1, zmax = 1,
+    colorscale = list(
+      list(0, "#2166AC"), list(0.5, "white"), list(1, "#B2182B")
+    ),
+    colorbar = list(title = "Cliff's δ\n(row vs col)")
+  ) |>
+    plotly::layout(
+      title = list(text = paste0(init_label, " — pairwise Cliff's δ between chapters")),
+      xaxis = list(
+        title = "chapter (column)", tickmode = "array",
+        tickvals = x_idx, ticktext = ord, tickangle = 45
+      ),
+      yaxis = list(
+        title = "chapter (row)", tickmode = "array",
+        tickvals = y_idx, ticktext = y_ord
+      ),
+      shapes = shapes_by_kind[[init_kind]],
+      margin = list(b = 140, l = 140)
+    )
+  # NB: plotly's own `height=` argument is ineffective here — Quarto's
+  # knit-print sizing for htmlwidgets derives the actual rendered pixel
+  # height from the chunk's `fig-height` (inches), overriding it. Size this
+  # figure via `#| fig-height:` in the .qmd, not via plot_ly()/layout().
+
+  p <- htmlwidgets::onRender(
+    p,
+    "
+    function(el, x, data) {
+      var wrap = document.createElement('div');
+      wrap.style.marginBottom = '8px';
+      var label = document.createElement('label');
+      label.innerText = 'Compare on: ';
+      label.style.fontSize = '13px';
+      label.style.marginRight = '6px';
+      var select = document.createElement('select');
+      select.style.fontSize = '13px';
+      select.style.maxWidth = '480px';
+      for (var i = 0; i < data.kinds.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = data.kinds[i];
+        opt.text = data.kind_labels[i];
+        if (data.kinds[i] === data.init_kind) { opt.selected = true; }
+        select.appendChild(opt);
+      }
+      wrap.appendChild(label);
+      wrap.appendChild(select);
+      el.parentNode.insertBefore(wrap, el);
+
+      select.addEventListener('change', function() {
+        var k = this.value;
+        var idx = data.kinds.indexOf(k);
+        Plotly.restyle(el, {z: [data.z[k]], text: [data.text[k]]}, [0]);
+        Plotly.relayout(el, {
+          shapes: data.shapes[k],
+          'title.text': data.kind_labels[idx] + ' — pairwise Cliff\\'s δ between chapters'
+        });
+      });
+    }
+    ",
+    data = list(
+      kinds = d$kinds, kind_labels = d$kind_labels, init_kind = init_kind,
+      z = z_by_kind, text = text_by_kind, shapes = shapes_by_kind
+    )
+  )
+
+  save_widget_html(p, "chapter_cliffs_delta_interactive", figures_dir)
   p
 }
 

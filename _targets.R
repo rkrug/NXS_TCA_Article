@@ -52,6 +52,11 @@ emb_cfg <- emb_cfg_full[setdiff(names(emb_cfg_full), emb_volatile)]
 zotero_tca_id <- cfg$zotero$assessments$tca$id
 zotero_nxs_id <- cfg$zotero$assessments$nxs$id
 zotero_keyring <- cfg$zotero$api_key_keyring
+# Citation extraction: which method feeds the production `corpus` (regex | llm),
+# and the OpenRouter LLM config for the alternative extractor. Hoisted so the
+# LLM connection details don't drag the whole cfg into target hashes.
+citations_active <- cfg$citations$active %||% "regex"
+citations_llm_cfg <- cfg$citations$llm
 # Config names baked into the rendered report filenames. tar_quarto's
 # output_file is evaluated eagerly at pipeline-construction time, so these must
 # be plain script variables (not targets). emb_name (above) is the active
@@ -79,7 +84,7 @@ list(
 
   tar_target(
     kd_raw_fn,
-    "input/key papers/TCA and Nexus Definitions.csv",
+    "input/TCA and Nexus Definitions-1.xlsx",
     format = "file"
   ),
 
@@ -156,41 +161,109 @@ list(
   # by assessment (assessment=tca / assessment=nxs) under one corpus root ----
 
   tar_target(
-    corpus_tca,
+    corpus_chapter_tca,
     get_corpus_from_snapshot(
       ids_db = ids_tca,
       snapshot_dir = "input/snapshot",
       project_folder = "output/NXS_TCA_corpus/_scratch/tca",
       workers = workers,
       zotero_path = zotero_tca,
-      dest_dir = "output/NXS_TCA_corpus/corpus/assessment=tca"
+      dest_dir = "output/NXS_TCA_corpus/corpus_chapter/assessment=tca"
     ),
     format = "file"
   ),
   tar_target(
-    corpus_nxs,
+    corpus_chapter_nxs,
     get_corpus_from_snapshot(
       ids_db = ids_nxs,
       snapshot_dir = "input/snapshot",
       project_folder = "output/NXS_TCA_corpus/_scratch/nxs",
       workers = workers,
       zotero_path = zotero_nxs,
-      dest_dir = "output/NXS_TCA_corpus/corpus/assessment=nxs"
+      dest_dir = "output/NXS_TCA_corpus/corpus_chapter/assessment=nxs"
     ),
     format = "file"
   ),
 
-  # Combined corpus dataset — both assessment branches must exist before the
-  # shared hive root is considered ready; downstream consumers read this
-  # root and see both assessment=tca and assessment=nxs partitions.
+  # Combined corpus_chapter dataset — the full assessment reference libraries
+  # (both assessment branches must exist before the shared hive root is
+  # considered ready). This is the former `corpus`; renamed to `corpus_chapter`
+  # now that the new `corpus` target holds the works CITED in the definitions.
+  # Downstream chapter<->keypaper analysis reads this root (assessment=tca /
+  # assessment=nxs partitions).
 
   tar_target(
-    corpus,
+    corpus_chapter,
     {
-      force(corpus_tca)
-      force(corpus_nxs)
-      dirname(corpus_tca)
+      force(corpus_chapter_tca)
+      force(corpus_chapter_nxs)
+      dirname(corpus_chapter_tca)
     },
+    format = "file"
+  ),
+
+  # Citations named inside the definitions -----------------------------------
+  # Extract every inline (author, year) token from the keypaper definitions,
+  # resolve each to a work in the MATCHING assessment's reference library (two
+  # passes: strict then loose; unresolved kept for verification), then build the
+  # new `corpus` = the distinct cited works (a subset of corpus_chapter, same
+  # schema). See R/extract_definition_citations.R / resolve_citations.R /
+  # build_cited_corpus.R.
+
+  # Two extraction methods, both built every run: `regex` (deterministic) and
+  # `llm` (OpenRouter). Both feed the same resolve_citations() and are compared
+  # in the Citation Method Comparison report.
+  tar_target(
+    key_citations,
+    extract_definition_citations(key_works),
+    format = "file"
+  ),
+  tar_target(
+    key_citations_llm,
+    extract_definition_citations_llm(key_works, citations_llm_cfg),
+    format = "file"
+  ),
+  tar_target(
+    citations_resolved,
+    resolve_citations(
+      citations_extracted_dir = key_citations,
+      zotero_root = dirname(zotero_tca),
+      ids_root = dirname(ids_tca),
+      corpus_chapter_dir = corpus_chapter,
+      out_dir = "output/NXS_TCA_corpus/citations_resolved/method=regex"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    citations_resolved_llm,
+    resolve_citations(
+      citations_extracted_dir = key_citations_llm,
+      zotero_root = dirname(zotero_tca),
+      ids_root = dirname(ids_tca),
+      corpus_chapter_dir = corpus_chapter,
+      out_dir = "output/NXS_TCA_corpus/citations_resolved/method=llm"
+    ),
+    format = "file"
+  ),
+  # The resolved citations that feed the production corpus + linkage, selected
+  # by citations.active in config.yaml (regex | llm). Both upstreams are built
+  # regardless; this just picks which one flows downstream.
+  tar_target(
+    citations_resolved_active,
+    if (identical(citations_active, "llm")) {
+      citations_resolved_llm
+    } else {
+      citations_resolved
+    },
+    format = "file"
+  ),
+  tar_target(
+    corpus,
+    build_cited_corpus(
+      resolved_dir = citations_resolved_active,
+      corpus_chapter_dir = corpus_chapter,
+      out_dir = "output/NXS_TCA_corpus/corpus"
+    ),
     format = "file"
   ),
 
@@ -201,7 +274,7 @@ list(
   tar_target(
     pilot_corpus_tca,
     make_pilot_subset(
-      corpus_path = corpus_tca,
+      corpus_path = corpus_chapter_tca,
       out_dir = file.path(
         "output/NXS_TCA_corpus",
         paste0("pilot_tca_n", emb_cfg$pilot_n)
@@ -213,7 +286,7 @@ list(
   tar_target(
     pilot_corpus_nxs,
     make_pilot_subset(
-      corpus_path = corpus_nxs,
+      corpus_path = corpus_chapter_nxs,
       out_dir = file.path(
         "output/NXS_TCA_corpus",
         paste0("pilot_nxs_n", emb_cfg$pilot_n)
@@ -241,7 +314,7 @@ list(
     embed_works(
       corpus_path = pilot_corpus_tca,
       out_dir = "output/NXS_TCA_corpus/embeddings",
-      source = "corpus",
+      source = "corpus_chapter",
       config_name = emb_name,
       cfg = emb_cfg,
       variant_name = "title",
@@ -256,7 +329,7 @@ list(
     embed_works(
       corpus_path = pilot_corpus_tca,
       out_dir = "output/NXS_TCA_corpus/embeddings",
-      source = "corpus",
+      source = "corpus_chapter",
       config_name = emb_name,
       cfg = emb_cfg,
       variant_name = "abstract",
@@ -271,7 +344,7 @@ list(
     embed_works(
       corpus_path = pilot_corpus_tca,
       out_dir = "output/NXS_TCA_corpus/embeddings",
-      source = "corpus",
+      source = "corpus_chapter",
       config_name = emb_name,
       cfg = emb_cfg,
       variant_name = "title_abstract",
@@ -286,7 +359,7 @@ list(
     embed_works(
       corpus_path = pilot_corpus_nxs,
       out_dir = "output/NXS_TCA_corpus/embeddings",
-      source = "corpus",
+      source = "corpus_chapter",
       config_name = emb_name,
       cfg = emb_cfg,
       variant_name = "title",
@@ -301,7 +374,7 @@ list(
     embed_works(
       corpus_path = pilot_corpus_nxs,
       out_dir = "output/NXS_TCA_corpus/embeddings",
-      source = "corpus",
+      source = "corpus_chapter",
       config_name = emb_name,
       cfg = emb_cfg,
       variant_name = "abstract",
@@ -316,7 +389,7 @@ list(
     embed_works(
       corpus_path = pilot_corpus_nxs,
       out_dir = "output/NXS_TCA_corpus/embeddings",
-      source = "corpus",
+      source = "corpus_chapter",
       config_name = emb_name,
       cfg = emb_cfg,
       variant_name = "title_abstract",
@@ -356,6 +429,42 @@ list(
       force(emb_corpus_nxs_title_abstract)
       dirname(emb_corpus_tca_title_abstract)
     },
+    format = "file"
+  ),
+
+  # Cited-corpus embeddings → source=corpus. The cited corpus is a subset of
+  # corpus_chapter sharing the same SPECTER2 config, so its embeddings are
+  # DERIVED by filtering the corpus_chapter embeddings to the cited-work ids
+  # (no TEI re-embedding). One target per variant, wire-compatible with the
+  # emb_corpus_* combiner handles (returns the variant= dir).
+  tar_target(
+    emb_cited_title,
+    derive_source_embeddings(
+      chapter_variant_dir = emb_corpus_title,
+      cited_corpus_dir = corpus,
+      config_name = emb_name,
+      variant = "title"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_cited_abstract,
+    derive_source_embeddings(
+      chapter_variant_dir = emb_corpus_abstract,
+      cited_corpus_dir = corpus,
+      config_name = emb_name,
+      variant = "abstract"
+    ),
+    format = "file"
+  ),
+  tar_target(
+    emb_cited_title_abstract,
+    derive_source_embeddings(
+      chapter_variant_dir = emb_corpus_title_abstract,
+      cited_corpus_dir = corpus,
+      config_name = emb_name,
+      variant = "title_abstract"
+    ),
     format = "file"
   ),
 
@@ -494,6 +603,13 @@ list(
       v
     }
   ),
+
+  # === Topic modelling: DISABLED for now (no topic modelling yet) ============
+  # The whole BERTopic compute + R2-sync region is wrapped in `if (FALSE)` so
+  # none of these targets enter the pipeline (they would need a live RunPod
+  # pod). Builder functions in R/ are kept intact. Re-enable by switching
+  # `if (FALSE)` to `if (TRUE)`.
+  if (FALSE) list(
   if (!is.null(cfg$bertopic$active_local)) {
     tar_target(
       bertopic_local_cfg,
@@ -617,7 +733,8 @@ list(
       corpus_r2_synced = emb_corpus_r2_synced
     ),
     format = "file"
-  ),
+  )
+  ), # end if (FALSE) — topic-modelling compute/sync disabled
 
   # NOTE: the previous topics alias target tried to switch
   # between Path A (topics_local) and Path B (topics_runpod)
@@ -696,7 +813,7 @@ list(
     build_viz_top_matches_per_kp_combined_data(
       scores_combined = scores_combined,
       key_works = key_works,
-      corpus = corpus
+      corpus = corpus_chapter
     ),
     format = qs2_format()
   ),
@@ -726,22 +843,38 @@ list(
     format = qs2_format()
   ),
   tar_target(
+    viz_chapter_keypaper_heatmap_interactive_fig,
+    build_viz_chapter_keypaper_heatmap_interactive_fig(
+      viz_chapter_keypaper_heatmap_data
+    ),
+    format = qs2_format()
+  ),
+  tar_target(
     viz_chapter_cliffs_delta_data,
     build_viz_chapter_cliffs_delta_data(scores_combined),
     format = qs2_format()
   ),
   tar_target(
     viz_chapter_cliffs_delta_fig,
-    build_viz_chapter_cliffs_delta_fig(
-      viz_chapter_cliffs_delta_data,
-      viz_chapter_alignment_data
+    build_viz_chapter_cliffs_delta_fig(viz_chapter_cliffs_delta_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_cliffs_delta_interactive_data,
+    build_viz_chapter_cliffs_delta_interactive_data(scores_combined, key_works),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_chapter_cliffs_delta_interactive_fig,
+    build_viz_chapter_cliffs_delta_interactive_fig(
+      viz_chapter_cliffs_delta_interactive_data
     ),
     format = qs2_format()
   ),
   tar_target(
     viz_text_length_data,
     build_viz_text_length_data(
-      corpus = corpus,
+      corpus = corpus_chapter,
       title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
       sep_token = emb_cfg$sep_token %||% "[SEP]"
     ),
@@ -762,9 +895,90 @@ list(
     build_viz_keypaper_self_sim_fig(viz_keypaper_self_sim_data),
     format = qs2_format()
   ),
+
+  # ---- Keyset linkage (keypaper <-> keypaper, 3 stages) --------------------
+  # How the concept definitions link across key-sets, especially TCA Action ->
+  # Nexus Response Option. Stage 1: definition-embedding similarity. Stage 2:
+  # overlap of the cited literature (no embeddings). Stage 3: mean pairwise
+  # cosine of the cited literature's embeddings. See R/build_linkage.R.
+  tar_target(
+    link_stage1,
+    build_link_stage1_data(emb_keypapers_title_abstract, key_works),
+    format = qs2_format()
+  ),
+  tar_target(
+    link_stage2,
+    build_link_stage2_data(citations_resolved_active, key_works),
+    format = qs2_format()
+  ),
+  tar_target(
+    link_stage3,
+    build_link_stage3_data(citations_resolved_active, emb_cited_title_abstract,
+                           key_works),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_stage1_fig,
+    build_sankey_fig(link_stage1, key_works, value_col = "sim",
+                     name = "sankey_stage1_definition_embedding"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_stage2_fig,
+    build_sankey_fig(link_stage2, key_works, value_col = "jaccard",
+                     name = "sankey_stage2_citation_overlap"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_stage3_fig,
+    build_sankey_fig(link_stage3, key_works, value_col = "sim",
+                     name = "sankey_stage3_cited_embedding"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keyset_matrix_stage1_fig,
+    build_keyset_matrix_fig(link_stage1, value_col = "sim",
+                            name = "keyset_matrix_stage1"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keyset_matrix_stage2_fig,
+    build_keyset_matrix_fig(link_stage2, value_col = "jaccard",
+                            name = "keyset_matrix_stage2"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_keyset_matrix_stage3_fig,
+    build_keyset_matrix_fig(link_stage3, value_col = "sim",
+                            name = "keyset_matrix_stage3"),
+    format = qs2_format()
+  ),
+
+  # ---- Citation method comparison (regex vs LLM) --------------------------
+  tar_target(
+    viz_citation_summary_tbl,
+    citation_comparison_summary(citations_resolved, citations_resolved_llm),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_citation_overlap_data,
+    citation_comparison_overlap(citations_resolved, citations_resolved_llm),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_citation_overlap_fig,
+    build_citation_overlap_fig(viz_citation_overlap_data),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_citation_review,
+    citation_comparison_review(citations_resolved, citations_resolved_llm),
+    format = qs2_format()
+  ),
+
   tar_target(
     viz_score_year_data,
-    build_viz_score_year_data(viz_scores_long, corpus),
+    build_viz_score_year_data(viz_scores_long, corpus_chapter),
     format = qs2_format()
   ),
   tar_target(
@@ -774,7 +988,7 @@ list(
   ),
   tar_target(
     viz_type_counts,
-    build_viz_type_counts(corpus, min_pct = 0.5),
+    build_viz_type_counts(corpus_chapter, min_pct = 0.5),
     format = qs2_format()
   ),
   tar_target(
@@ -784,7 +998,7 @@ list(
   ),
   tar_target(
     viz_type_score_stats,
-    build_viz_type_score_stats(viz_scores_long, corpus, min_pct = 0.5),
+    build_viz_type_score_stats(viz_scores_long, corpus_chapter, min_pct = 0.5),
     format = qs2_format()
   ),
   tar_target(
@@ -799,7 +1013,7 @@ list(
   ),
   tar_target(
     viz_language_counts,
-    build_viz_language_counts(corpus, min_pct = 0.5),
+    build_viz_language_counts(corpus_chapter, min_pct = 0.5),
     format = qs2_format()
   ),
   tar_target(
@@ -810,7 +1024,7 @@ list(
   tar_target(
     viz_truncation_stats,
     build_viz_truncation_stats(
-      corpus,
+      corpus_chapter,
       title_cap_combined = emb_cfg$title_cap_combined %||% 200L,
       sep_token = emb_cfg$sep_token %||% "[SEP]"
     ),
@@ -848,7 +1062,7 @@ list(
   ),
   tar_target(
     viz_citation_score_data,
-    build_viz_citation_score_data(viz_scores_long, corpus),
+    build_viz_citation_score_data(viz_scores_long, corpus_chapter),
     format = qs2_format()
   ),
   tar_target(
@@ -858,7 +1072,7 @@ list(
   ),
   tar_target(
     viz_top_bottom,
-    viz_top_bottom_tables(viz_scores_long, corpus),
+    viz_top_bottom_tables(viz_scores_long, corpus_chapter),
     format = qs2_format()
   ),
   tar_target(
@@ -876,6 +1090,9 @@ list(
     build_viz_threshold_fig(viz_scores_long),
     format = qs2_format()
   ),
+
+  # === Topic-modelling visualisation: DISABLED (see if(FALSE) note above) ====
+  if (FALSE) list(
   tar_target(
     viz_umap_coords_df,
     viz_umap_coords(
@@ -892,7 +1109,7 @@ list(
       emb_corpus_title = emb_corpus_title,
       emb_keypapers_title = emb_keypapers_title,
       scores_title_abstract = scores_title_abstract,
-      corpus = corpus,
+      corpus = corpus_chapter,
       key_works = key_works
     ),
     format = qs2_format()
@@ -946,7 +1163,8 @@ list(
       emb_keypaper = viz_umap_kp
     ),
     format = qs2_format()
-  ),
+  )
+  ), # end if (FALSE) — topic-modelling viz disabled
 
   # Render the embeddings report. Re-builds whenever any score parquet,
   # the embeddings dataset, or the .qmd itself changes.
@@ -961,10 +1179,9 @@ list(
     quiet = TRUE
   ),
 
-  # Render the Topic Modelling Report. Re-builds whenever any of its tar_read()
-  # targets (corpus, key_works, topics_runpod, ...) or the
-  # .qmd itself changes.
-  tarchetypes::tar_quarto(
+  # Render the Topic Modelling Report — DISABLED (no topic modelling for now).
+  # Re-enable together with the topic compute/viz blocks above.
+  if (FALSE) tarchetypes::tar_quarto(
     render_report_topic_modelling,
     path = "NXS TCS Article Topic Modelling Report.qmd",
     output_file = paste0(
@@ -987,9 +1204,20 @@ list(
     quiet = TRUE
   ),
 
-  # Top-level index: intro + links to the three reports. Depends only on
-  # config_file (via tar_read in the .qmd) — a lightweight landing page that
-  # does NOT force-build the heavy / pod-dependent reports; its links resolve
+  # Render the Citation Method Comparison Report (regex vs LLM extraction).
+  tarchetypes::tar_quarto(
+    render_report_citation_comparison,
+    path = "NXS TCS Article Citation Method Comparison Report.qmd",
+    output_file = paste0(
+      "NXS TCS Article Citation Method Comparison Report - ",
+      emb_name,
+      ".html"
+    ),
+    quiet = TRUE
+  ),
+
+  # Top-level index: intro + links to the reports. Depends only on the reports
+  # (via tar_read in the .qmd) — a lightweight landing page; its links resolve
   # once each report is rendered into output/reports/.
   tarchetypes::tar_quarto(
     render_report_index,
@@ -1029,7 +1257,8 @@ list(
     },
     format = "file"
   ),
-  tar_target(
+  # report_topic_modelling — DISABLED (no topic modelling for now).
+  if (FALSE) tar_target(
     report_topic_modelling,
     {
       src <- render_report_topic_modelling[grepl(
@@ -1062,6 +1291,29 @@ list(
           "Expected exactly one rendered .html among ",
           "render_report_analysis's tracked files, got: ",
           paste(render_report_analysis, collapse = ", ")
+        )
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
+      dest
+    },
+    format = "file"
+  ),
+  tar_target(
+    report_citation_comparison,
+    {
+      src <- render_report_citation_comparison[grepl(
+        "\\.html$", render_report_citation_comparison
+      )]
+      if (length(src) != 1) {
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_report_citation_comparison's tracked files, got: ",
+          paste(render_report_citation_comparison, collapse = ", ")
         )
       }
       dest_dir <- "output/reports"

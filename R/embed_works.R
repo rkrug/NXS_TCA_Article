@@ -26,8 +26,9 @@ embed_works <- function(
   preprocessor_args = list(),
   assessment = NULL
 ) {
-  if (!source %in% c("corpus", "keypaper")) {
-    stop("`source` must be 'corpus' or 'keypaper', got: ", source)
+  if (!source %in% c("corpus_chapter", "corpus", "keypaper")) {
+    stop("`source` must be 'corpus_chapter', 'corpus' or 'keypaper', got: ",
+         source)
   }
   if (!is.character(variant_name) || length(variant_name) != 1L ||
       !nzchar(variant_name)) {

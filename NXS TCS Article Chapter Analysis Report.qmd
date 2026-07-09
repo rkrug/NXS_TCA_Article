@@ -76,19 +76,37 @@ row chapter's papers tend to score *higher* than the column's, blue = lower.
 tar_read(viz_chapter_cliffs_delta_fig)
 ```
 
+The chart above collapses each work to its single best-matching keypaper
+(`max_sim`) before comparing chapters. The interactive version below lets you
+pick, from the combobox, either that same collapsed view or any **individual**
+keypaper's raw similarity — i.e. "which chapters differ on their match to
+*this specific concept*" rather than "on their best match to any concept".
+Black borders mark |δ| ≥ 0.147 (a "real", non-negligible difference) in
+either view.
+
+```{r}
+#| label: fig-chapter-cliffs-delta-interactive
+#| fig-cap: "Interactive pairwise Cliff's δ between assessment/chapters. Use the combobox to switch between the collapsed max-keypaper-similarity view and any individual keypaper's raw similarity. Black borders mark |δ| ≥ 0.147 (a real, non-negligible difference)."
+#| fig-height: 10
+tar_read(viz_chapter_cliffs_delta_interactive_fig)
+```
+
 # In detail: chapter × keypaper
 
 Median similarity of each assessment/chapter to each **individual** keypaper.
 Bright cells = the chapter's papers are close to that concept; dark rows =
 concepts the corpus has little near (orphans); a chapter's brightest cells are
 the concepts it most aligns with. Rows (keypapers) and columns (chapters) are
-ordered by overall median.
+ordered by overall median. With 161 keypapers this is too long to read as one
+static chart — use the **keyset checkboxes** below to isolate one or two
+keysets at a time; row labels are truncated to 30 characters, full titles are
+on hover.
 
 ```{r}
-#| label: fig-chapter-keypaper-heatmap
-#| fig-cap: "Median cosine similarity per (assessment/chapter, keypaper). Rows = keypaper concepts, columns = assessment/chapter."
+#| label: fig-chapter-keypaper-heatmap-interactive
+#| fig-cap: "Median cosine similarity per (assessment/chapter, keypaper), filterable by keyset. Rows = keypaper concepts, columns = assessment/chapter."
 #| fig-height: 12
-tar_read(viz_chapter_keypaper_heatmap_fig)
+tar_read(viz_chapter_keypaper_heatmap_interactive_fig)
 ```
 
 # Top matches per keypaper, by chapter
@@ -239,3 +257,61 @@ htmltools::div(
 *Per-keypaper score distribution (q05–q25–median–q75–q95). Top = high across the
 corpus (broad/generic concepts); bottom = orphans (topic not well-represented).
 Inputs to keypaper-set curation.*
+
+# Keyset linkage
+
+How do the concept definitions link *to one another* across the four key-sets
+(the worksheet groups: `TCA_Annex_3_3`, `TCA_Approaches_3_2`,
+`TCA_Actions_Ch5`, `Nexus_Response_Options`)? Of particular interest is the
+link between **TCA Action → Nexus Response Option**. Three complementary
+similarity signals are used, each with a Sankey (top 3 targets per source node,
+Action → Response Option) and a keyset × keyset mean-similarity matrix.
+
+## Stage 1 — definition-text similarity (embeddings)
+
+Cosine similarity between the keypaper definition embeddings (title_abstract,
+SPECTER2). Two definitions link if their *wording/concepts* are close.
+
+```{r}
+#| label: fig-sankey-stage1
+tar_read(viz_sankey_stage1_fig)
+```
+
+```{r}
+#| label: fig-keyset-matrix-stage1
+#| fig-cap: "Keyset × keyset mean definition-embedding cosine similarity."
+tar_read(viz_keyset_matrix_stage1_fig)
+```
+
+## Stage 2 — cited-literature overlap (no embeddings)
+
+Two definitions link if they *cite the same works*. Edges are the Jaccard
+overlap of the resolved cited-work sets (only pairs sharing ≥1 work).
+
+```{r}
+#| label: fig-sankey-stage2
+tar_read(viz_sankey_stage2_fig)
+```
+
+```{r}
+#| label: fig-keyset-matrix-stage2
+#| fig-cap: "Keyset × keyset mean Jaccard overlap of cited-work sets."
+tar_read(viz_keyset_matrix_stage2_fig)
+```
+
+## Stage 3 — cited-literature embedding similarity
+
+Two definitions link if the *literature they cite* is semantically close —
+mean pairwise cosine between the two definitions' cited-work embedding sets
+(computed as the dot product of their unit-vector centroids).
+
+```{r}
+#| label: fig-sankey-stage3
+tar_read(viz_sankey_stage3_fig)
+```
+
+```{r}
+#| label: fig-keyset-matrix-stage3
+#| fig-cap: "Keyset × keyset mean cited-literature embedding similarity."
+tar_read(viz_keyset_matrix_stage3_fig)
+```

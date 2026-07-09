@@ -22,38 +22,22 @@ execute:
 #| label: setup
 #| include: false
 library(targets)
-# Depend on the three reports (tar_read) so this index is built *after* them
-# and its links resolve. report_embeddings / report_analysis return the exact
-# rendered .html paths (used for their links); report_topic_modelling is the
-# active topic report — a dependency token that guarantees at least the active
-# topic report exists (the glob below then also lists any archived ones).
-# NOTE: this couples the index to report_topic_modelling, which needs a
-# BERTopic pod run — building the index will trigger that pipeline.
+# Depend on the two reports (tar_read) so this index is built *after* them and
+# its links resolve. report_embeddings / report_analysis return the exact
+# rendered .html paths (used for their links). Topic modelling is disabled for
+# now, so there is no topic-report dependency.
 emb_path <- tar_read(report_embeddings)
 ana_path <- tar_read(report_analysis)
-invisible(tar_read(report_topic_modelling))
+cmp_path <- tar_read(report_citation_comparison)
 # Pipeline diagrams — pre-rendered SVGs (mmd_figs, via mermaid-cli) embedded
 # below. tar_read makes editing a .mmd (→ mmd_figs) re-render this index.
 mmd_figs <- tar_read(mmd_figs)
 pipeline_svg <- grep("/pipeline\\.svg$", mmd_figs, value = TRUE)[1]
 sequence_svg <- grep("/sequence\\.svg$", mmd_figs, value = TRUE)[1]
-cfg <- yaml::read_yaml(tar_read(config_file))
 enc <- function(x) gsub(" ", "%20", x) # href-encode spaces in the filenames
 emb_html <- enc(basename(emb_path))
 ana_html <- enc(basename(ana_path))
-
-# ALL rendered topic-modelling reports (one per bertopic config, archived by
-# render_report_topic_modelling), discovered in output/reports/ rather than
-# only the active_for_viz one. Re-render this index to pick up new ones.
-report_dir <- "output/reports"
-topic_pat <- "^NXS TCS Article Topic Modelling Report - (.*)\\.html$"
-topic_files <- if (dir.exists(report_dir)) {
-  sort(list.files(report_dir, pattern = topic_pat))
-} else {
-  character(0)
-}
-topic_cfg <- sub(topic_pat, "\\1", topic_files) # bertopic config name each
-active_viz <- cfg$bertopic$active_for_viz
+cmp_html <- enc(basename(cmp_path))
 ```
 
 This is the landing page for the **NXS TCS Article** analysis. The corpus is
@@ -61,7 +45,9 @@ built from two curated IPBES assessment Zotero groups — **TCA** and **NXS** �
 matched to OpenAlex works and extracted from a local snapshot. Each work is
 embedded with **SPECTER2** (title, abstract, and title+abstract variants) and
 scored by cosine similarity against a curated set of **TCA/Nexus keypaper
-concept definitions**. The corpus is then clustered with **BERTopic**.
+concept definitions**. Inline citations in the definitions are extracted and
+resolved to a **cited corpus**, and the key-sets are linked to one another
+(notably **TCA Action ↔ Nexus Response Option**) via three similarity stages.
 
 The analysis is split across three reports, described below. Each opens in the
 `output/reports/` folder alongside this page; a link resolves once that report
@@ -83,51 +69,36 @@ interpreting the analysis.
 ### [Chapter Analysis Report](%s)
 
 The main analysis: **how close the papers in each assessment / chapter are to
-the keypaper concepts.** Overall chapter alignment (median similarity with
-bootstrap 95%% CIs), which chapters are *really* different (Cliff’s
-δ), the chapter × keypaper heatmap, and an interactive per-keypaper
-top-matches browser with matches stacked by assessment / chapter. Also includes
-corpus-wide keypaper-relevance (score distributions, score vs year / citations /
-work type) and keypaper-set diagnostics (coherence, per-keypaper distribution).
+the keypaper concepts**, plus **keyset linkage** — how the concept definitions
+link to one another (notably TCA Action ↔ Nexus Response Option) across three
+stages (definition-embedding similarity, cited-literature overlap, and
+cited-literature embedding similarity) with Sankey diagrams. Also overall
+chapter alignment (median similarity with bootstrap 95%% CIs), Cliff’s
+δ, the chapter × keypaper heatmap, an interactive per-keypaper
+top-matches browser, corpus-wide keypaper-relevance, and keypaper-set
+diagnostics.
 
-### Topic Modelling Reports
+_Topic modelling (BERTopic) is disabled in this configuration._
 
-**BERTopic** clustering of the corpus (UMAP + HDBSCAN) and how the keypaper
-concepts distribute across the discovered topics. One report per BERTopic
-config; the config name is shown in front of each link.
+### [Citation Method Comparison Report](%s)
+
+Compares the **two citation-identification methods** — the deterministic regex
+parser and the LLM (OpenRouter) parser — that extract the in-text citations
+from the definitions: extraction volume, agreement per keyset, and resolution
+rate (a precision proxy) to judge which performs better.
 
 ',
   emb_html,
-  ana_html
+  ana_html,
+  cmp_html
 ))
-
-if (length(topic_files)) {
-  for (i in seq_along(topic_files)) {
-    tag <- if (identical(topic_cfg[i], active_viz)) {
-      " — *active (feeds the viz layer)*"
-    } else {
-      ""
-    }
-    cat(sprintf(
-      "- **%s** — [Topic Modelling Report](%s)%s\n",
-      topic_cfg[i],
-      enc(topic_files[i]),
-      tag
-    ))
-  }
-} else {
-  cat(
-    "_No topic-modelling reports have been rendered yet — run the topic",
-    "pipeline, then re-render this index._\n"
-  )
-}
 ```
 
 # Pipeline
 
 The `targets` pipeline that produces these reports — from the two IPBES Zotero
-groups through embeddings, keypaper scoring and BERTopic. (Source:
-`input/mmd/pipeline.mmd`.)
+groups through embeddings, keypaper scoring, citation resolution and keyset
+linkage. (Source: `input/mmd/pipeline.mmd`.)
 
 ```{r}
 #| label: fig-pipeline

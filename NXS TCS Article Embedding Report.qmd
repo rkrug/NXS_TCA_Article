@@ -41,7 +41,7 @@ The corpus contains the following missing titles and abstracts
 
 ```{r}
 #| label: tbl-missing-titles
-ds <- arrow::open_dataset(tar_read(corpus))
+ds <- arrow::open_dataset(tar_read(corpus_chapter))
 n_total <- nrow(ds)
 n_na <- ds |> dplyr::filter(is.na(title)) |> nrow()
 n_empty <- ds |> dplyr::filter(!is.na(title), title == "") |> nrow()
@@ -62,7 +62,7 @@ tibble::tibble(
 
 ```{r}
 #| label: tbl-missing-abstracts
-ds <- arrow::open_dataset(tar_read(corpus))
+ds <- arrow::open_dataset(tar_read(corpus_chapter))
 n_total <- nrow(ds)
 n_na <- ds |> dplyr::filter(is.na(abstract)) |> nrow()
 n_empty <- ds |> dplyr::filter(!is.na(abstract), abstract == "") |> nrow()
@@ -104,18 +104,24 @@ emb_meta <- dirname(dirname(dirname(tar_read(emb_corpus_title)))) |>
   dplyr::arrange(config, source)
 
 
-# Total works available per source (before embedding)
-n_corpus <- nrow(arrow::open_dataset(tar_read(corpus)))
+# Total works available per source (before embedding). Three sources now:
+#   corpus_chapter — the full assessment reference libraries
+#   corpus         — the works CITED inside the definitions (cited corpus)
+#   keypaper       — the TCA/Nexus concept definitions
+n_corpus_chapter <- nrow(arrow::open_dataset(tar_read(corpus_chapter)))
+n_corpus_cited <- nrow(arrow::open_dataset(tar_read(corpus)))
 n_keypaper <- nrow(arrow::open_dataset(tar_read(key_works)))
 
 emb_meta <- emb_meta |>
   dplyr::mutate(
-    corpus_size = dplyr::if_else(source == "corpus", n_corpus, n_keypaper)
+    corpus_size = dplyr::case_when(
+      source == "corpus_chapter" ~ n_corpus_chapter,
+      source == "corpus" ~ n_corpus_cited,
+      source == "keypaper" ~ n_keypaper,
+      TRUE ~ NA_integer_
+    )
   ) |>
   dplyr::arrange(config, source) |>
-  dplyr::mutate(
-    corpus_size = dplyr::if_else(source == "corpus", n_corpus, n_keypaper)
-  ) |>
   dplyr::relocate(corpus_size, .after = source)
 
 # Map config name → model_id for the caption
@@ -136,6 +142,38 @@ knitr::kable(
     model_ids[[active_cfg]]
   )
 )
+```
+
+## Citation extraction & resolution
+
+Inline citations were extracted from the concept definitions (regex) and
+resolved to works in the *matching assessment's* reference library in two
+passes — `strict` (first-author surname + exact year) then `loose` (fuzzy
+surname, year ±1). The distinct resolved works form the new **cited corpus**
+(`corpus`); works still `unmatched` after both passes are retained for manual
+verification. Coverage per keyset:
+
+```{r}
+#| label: tbl-citation-resolution
+res <- arrow::open_dataset(tar_read(citations_resolved)) |> dplyr::collect()
+res |>
+  dplyr::count(keyset, match_pass) |>
+  tidyr::pivot_wider(names_from = match_pass, values_from = n,
+                     values_fill = 0L) |>
+  dplyr::mutate(
+    total = rowSums(dplyr::across(dplyr::any_of(
+      c("strict", "loose", "unmatched")
+    ))),
+    `resolved %` = 100 * (total - dplyr::coalesce(unmatched, 0L)) / total
+  ) |>
+  knitr::kable(
+    digits = 1, format.args = list(big.mark = ","),
+    caption = sprintf(
+      paste0("Citation resolution by keyset. Cited corpus: %s distinct works ",
+             "embedded (source=corpus)."),
+      format(nrow(arrow::open_dataset(tar_read(corpus))), big.mark = ",")
+    )
+  )
 ```
 
 ## Language distribution

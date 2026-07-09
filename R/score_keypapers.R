@@ -49,11 +49,14 @@ score_keypapers <- function(
   rm(R, ref); gc()
 
   # Stream the corpus side: open each parquet file under
-  # source=corpus/variant=<variant>/ separately to keep peak memory bounded.
-  # Each embed_works batch file is ~50-100k rows, so a chunk's matmul against
-  # ~10^2 keypapers stays in the low-GB range.
+  # source=<corpus_source>/variant=<variant>/ separately to keep peak memory
+  # bounded. Each embed_works batch file is ~50-100k rows, so a chunk's matmul
+  # against ~10^2 keypapers stays in the low-GB range. The corpus source label
+  # is taken from the passed dir (basename), so this works for both the
+  # chapter corpus (source=corpus_chapter) and the cited corpus (source=corpus).
+  corpus_source <- basename(corpus_emb_dir)
   corpus_dir <- file.path(
-    embeddings_db, "source=corpus", paste0("variant=", variant)
+    embeddings_db, corpus_source, paste0("variant=", variant)
   )
   if (!dir.exists(corpus_dir)) {
     stop("No corpus embeddings directory for variant: ", variant,

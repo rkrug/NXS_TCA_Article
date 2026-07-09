@@ -16,6 +16,23 @@ zotero:
       description: "IPBES NXS assessment literature Zotero group (private)"
   api_key_keyring: API_zotero_all_groups
 
+# Inline-citation extraction from the concept definitions. Two methods run as
+# parallel targets (both built by tar_make): a deterministic regex parser and
+# an LLM parser via OpenRouter. Both feed the same resolve_citations() step and
+# are compared in the Citation Method Comparison report. The regex chain feeds
+# the production `corpus` (cited works); switch `active` to "llm" to use the
+# LLM chain instead.
+citations:
+  active: regex           # which extraction feeds the production `corpus`: regex | llm
+  llm:
+    api_key_keyring: API_openrouter   # keyring::key_set("API_openrouter") — OpenRouter key
+    base_url: https://openrouter.ai/api/v1/chat/completions
+    model: anthropic/claude-sonnet-5
+    temperature: 0
+    max_retries: 3
+    timeout: 90            # per-request seconds; fail fast instead of stalling
+    workers: 6             # parallel API calls (furrr multisession); 1 = sequential
+
 embeddings:
   # Which entry under configs: is active for this pipeline run. The active
   # name is also used as the `config=` hive-partition value under
@@ -47,7 +64,7 @@ embeddings:
     # RunPod-hosted TEI on a rented L40s/A100/H100. Flip embeddings.active above and
     # populate host/auth before use. See scripts/start_tei_runpod.sh.
     SPECTER2_runpod:
-      host: pof6hmf5q6dfrk-8080.proxy.runpod.net
+      host: fcb12v29f8dykn-8080.proxy.runpod.net
       port: 443
       scheme: https
       # auth_token_keyring: API_TEI   # keyring::key_set("API_TEI") first
