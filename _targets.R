@@ -917,6 +917,11 @@ list(
                            key_works),
     format = qs2_format()
   ),
+  # Interactive (echarts4r) Sankeys — DISABLED for now in favour of the static
+  # ggplot versions below (build_sankey_fig() is left in place, unreferenced).
+  # Re-enable by unwrapping and repointing the report's fig-sankey-* chunks
+  # back to these targets.
+  if (FALSE) list(
   tar_target(
     viz_sankey_stage1_fig,
     build_sankey_fig(link_stage1, key_works, value_col = "sim",
@@ -933,6 +938,25 @@ list(
     viz_sankey_stage3_fig,
     build_sankey_fig(link_stage3, key_works, value_col = "sim",
                      name = "sankey_stage3_cited_embedding"),
+    format = qs2_format()
+  )
+  ),
+  tar_target(
+    viz_sankey_stage1_ggplot_fig,
+    build_sankey_fig_ggplot(link_stage1, key_works, value_col = "sim",
+                            name = "sankey_stage1_definition_embedding_ggplot"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_stage2_ggplot_fig,
+    build_sankey_fig_ggplot(link_stage2, key_works, value_col = "jaccard",
+                            name = "sankey_stage2_citation_overlap_ggplot"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_stage3_ggplot_fig,
+    build_sankey_fig_ggplot(link_stage3, key_works, value_col = "sim",
+                            name = "sankey_stage3_cited_embedding_ggplot"),
     format = qs2_format()
   ),
   tar_target(

@@ -15,10 +15,10 @@
 # source->target keyset pair (top-N links per source node), and
 # build_keyset_matrix_fig() renders the keyset x keyset aggregate heatmap.
 
-# Read (id -> keyset, title) for node labelling / keyset attribution.
+# Read (id -> keyset, title, code) for node labelling / keyset attribution.
 .keypaper_meta <- function(key_works_dir) {
   arrow::open_dataset(key_works_dir) |>
-    dplyr::select(id, keyset, title) |>
+    dplyr::select(id, keyset, title, code) |>
     dplyr::collect()
 }
 
@@ -154,7 +154,13 @@ build_link_stage3_data <- function(citations_resolved,
 # ---- Sankey: one directed keyset->keyset diagram --------------------------
 # edge_data: long df with id_a/id_b/keyset_a/keyset_b + a numeric value column.
 # Keeps the top_n strongest links per source node (source keyset -> target
-# keyset), labels nodes by keypaper title, colours by keyset.
+# keyset), labels nodes by keypaper title, colours by keyset. Built with
+# echarts4r (ECharts) rather than plotly: ECharts' sankey series supports
+# per-node label position ("left"/"right", rendered outside the node with no
+# manual annotation/margin math) and ships built-in hover-adjacency
+# highlighting (`emphasis.focus = "adjacency"`) — both were only achievable in
+# plotly via hand-rolled paper-coordinate annotations and had no hover
+# highlighting equivalent at all.
 build_sankey_fig <- function(edge_data,
                              key_works,
                              value_col,
@@ -164,9 +170,14 @@ build_sankey_fig <- function(edge_data,
                              top_n = 3,
                              figures_dir = "output/figures") {
   meta <- .keypaper_meta(key_works)
+  title_lbl <- ifelse(is.na(meta$title) | !nzchar(meta$title), meta$id,
+                       substr(meta$title, 1, 60))
+  # Prepend the code where the keyset has one (e.g. Nexus Response Options'
+  # "B01") and it isn't already baked into the title (TCA Actions' titles
+  # already start with "Action 1.1: ...").
+  has_code <- !is.na(meta$code) & nzchar(meta$code)
   label_of <- stats::setNames(
-    ifelse(is.na(meta$title) | !nzchar(meta$title), meta$id,
-           substr(meta$title, 1, 60)),
+    ifelse(has_code, paste(meta$code, title_lbl), title_lbl),
     meta$id
   )
 
@@ -178,61 +189,222 @@ build_sankey_fig <- function(edge_data,
   # top_n targets per source node by value
   e <- e[order(e$id_a, -e$value), , drop = FALSE]
   e <- do.call(rbind, lapply(split(e, e$id_a), utils::head, n = top_n))
-
-  if (is.null(e) || !nrow(e)) {
-    w <- plotly::plot_ly() |>
-      plotly::add_annotations(
-        text = paste0("No ", source_keyset, " → ", target_keyset,
-                      " links above 0"),
-        showarrow = FALSE
-      )
-    save_widget_html(w, name, figures_dir)
-    return(w)
+  if (is.null(e)) {
+    e <- data.frame(id_a = character(0), id_b = character(0),
+                    value = numeric(0))
   }
 
-  # Sort by display label (not raw id) so source nodes read alphabetically
-  # top-to-bottom. Plotly's default arrangement ("snap") repositions nodes to
-  # minimize link crossings and ignores array order entirely, so the sort
-  # only takes visual effect when combined with arrangement="fixed" + explicit
-  # per-node x/y below.
-  src_ids <- unique(e$id_a)
+  # Every Action / Response Option is shown as a node, even ones with no
+  # qualifying link (they just end up unconnected) — so the diagram reflects
+  # the full keyset, not only the subset that happened to survive top_n.
+  # Sort by display label (not raw id) so nodes read alphabetically
+  # top-to-bottom; ECharts' `layout="none"` + explicit per-node x/y (below)
+  # honours this order exactly (unlike plotly's default "snap" arrangement,
+  # which repositions nodes to minimize link crossings and ignores array
+  # order).
+  src_ids <- meta$id[meta$keyset == source_keyset]
   src_ids <- src_ids[order(unname(label_of[src_ids]))]
-  tgt_ids <- unique(e$id_b)
+  tgt_ids <- meta$id[meta$keyset == target_keyset]
   tgt_ids <- tgt_ids[order(unname(label_of[tgt_ids]))]
-  nodes <- c(src_ids, tgt_ids)
-  idx <- stats::setNames(seq_along(nodes) - 1L, nodes) # 0-based for plotly
-  node_labels <- unname(label_of[nodes])
-  node_colors <- c(rep("#2563eb", length(src_ids)),
-                   rep("#16a34a", length(tgt_ids)))
 
-  # node.y=0 is the top in plotly's sankey coordinate space; evenly space each
-  # column top-to-bottom in the alphabetical order established above.
+  # node.y=0 is the top; evenly space each column top-to-bottom in the
+  # alphabetical order established above.
   y_pos <- function(n) if (n <= 1) 0.5 else seq(0.02, 0.98, length.out = n)
-  node_x <- c(rep(0.01, length(src_ids)), rep(0.99, length(tgt_ids)))
-  node_y <- c(y_pos(length(src_ids)), y_pos(length(tgt_ids)))
+  src_y <- y_pos(length(src_ids))
+  tgt_y <- y_pos(length(tgt_ids))
 
-  w <- plotly::plot_ly(
-    type = "sankey", orientation = "h", arrangement = "fixed",
-    node = list(
-      label = node_labels, color = node_colors,
-      x = node_x, y = node_y,
-      pad = 12, thickness = 16,
-      line = list(color = "white", width = 0.5)
-    ),
-    link = list(
-      source = unname(idx[e$id_a]),
-      target = unname(idx[e$id_b]),
-      value = e$value,
-      label = sprintf("%s = %.3f", value_col, e$value)
-    )
-  ) |>
-    plotly::layout(
-      title = sprintf("%s → %s (top %d per node, by %s)",
+  .make_side <- function(ids, y, x, color, side) {
+    unname(Map(function(id, yy) {
+      full <- unname(label_of[id])
+      list(
+        name = id, x = x, y = yy,
+        itemStyle = list(color = color),
+        label = list(
+          position = side,
+          formatter = htmlwidgets::JS("function(p){return p.data.disp;}")
+        ),
+        disp = substr(full, 1, 30),
+        full = full
+      )
+    }, ids, y))
+  }
+  nodes <- c(
+    .make_side(src_ids, src_y, 0.05, "#2563eb", "left"),
+    .make_side(tgt_ids, tgt_y, 0.95, "#16a34a", "right")
+  )
+
+  links <- unname(Map(function(a, b, v) {
+    list(source = a, target = b, value = v,
+         label_text = sprintf("%s = %.3f", value_col, v))
+  }, e$id_a, e$id_b, e$value))
+
+  opt <- list(
+    title = list(
+      text = sprintf("%s → %s (top %d per node, by %s)",
                       source_keyset, target_keyset, top_n, value_col),
-      font = list(size = 11)
-    )
+      left = "center", textStyle = list(fontSize = 13)
+    ),
+    tooltip = list(
+      trigger = "item", triggerOn = "mousemove",
+      formatter = htmlwidgets::JS(
+        "function(p){
+           if (p.dataType === 'edge') { return p.data.label_text; }
+           return p.data.full;
+         }"
+      )
+    ),
+    series = list(list(
+      type = "sankey", layout = "none",
+      left = "20%", right = "20%", top = "8%", bottom = "2%",
+      emphasis = list(focus = "adjacency"),
+      data = nodes, links = links,
+      label = list(fontSize = 10),
+      lineStyle = list(color = "gray", opacity = 0.35, curveness = 0.5),
+      nodeWidth = 16, nodeGap = 8
+    ))
+  )
+
+  w <- echarts4r::e_charts() |> echarts4r::e_list(opt)
   save_widget_html(w, name, figures_dir)
   w
+}
+
+# Interpolate a smooth S-curve between (x0,y0) and (x1,y1) — smoothstep easing
+# on y so the "ribbon" leaves/arrives roughly horizontal at each node, the
+# same visual convention as a real Sankey link (used by build_sankey_fig_ggplot).
+.sankey_curve_points <- function(x0, x1, y0, y1, n = 40) {
+  t <- seq(0, 1, length.out = n)
+  s <- t^2 * (3 - 2 * t) # smoothstep
+  data.frame(x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * s)
+}
+
+# ---- Sankey (static ggplot alternative) -----------------------------------
+# Same contract as build_sankey_fig() (identical args, same top_n/all-nodes/
+# alphabetical-order semantics) but hand-drawn with ggplot2 instead of
+# echarts4r: links are manually interpolated S-curves (geom_path, linewidth ~
+# value), nodes are geom_segment ticks, labels are geom_text placed outside
+# the plotting area via clip = "off". Static PNG — no hover highlighting,
+# but pixel-exact label placement/sizing needs none of the paper-coordinate
+# or layout-relaxation workarounds the interactive versions required.
+build_sankey_fig_ggplot <- function(edge_data,
+                                    key_works,
+                                    value_col,
+                                    name,
+                                    source_keyset = "TCA_Actions_Ch5",
+                                    target_keyset = "Nexus_Response_Options",
+                                    top_n = 3,
+                                    figures_dir = "output/figures") {
+  meta <- .keypaper_meta(key_works)
+  title_lbl <- ifelse(is.na(meta$title) | !nzchar(meta$title), meta$id,
+                       substr(meta$title, 1, 60))
+  has_code <- !is.na(meta$code) & nzchar(meta$code)
+  label_of <- stats::setNames(
+    ifelse(has_code, paste(meta$code, title_lbl), title_lbl),
+    meta$id
+  )
+
+  e <- edge_data[edge_data$keyset_a == source_keyset &
+                   edge_data$keyset_b == target_keyset, , drop = FALSE]
+  e$value <- as.numeric(e[[value_col]])
+  e <- e[is.finite(e$value) & e$value > 0, , drop = FALSE]
+  e <- e[order(e$id_a, -e$value), , drop = FALSE]
+  e <- do.call(rbind, lapply(split(e, e$id_a), utils::head, n = top_n))
+  if (is.null(e)) {
+    e <- data.frame(id_a = character(0), id_b = character(0),
+                    value = numeric(0))
+  }
+
+  # Every Action / Response Option is a node, linked or not (see
+  # build_sankey_fig() for why); ordered alphabetically by display label.
+  src_ids <- meta$id[meta$keyset == source_keyset]
+  src_ids <- src_ids[order(unname(label_of[src_ids]))]
+  tgt_ids <- meta$id[meta$keyset == target_keyset]
+  tgt_ids <- tgt_ids[order(unname(label_of[tgt_ids]))]
+
+  # Purely positional y (0 = bottom, 1 = top), independent of link value —
+  # ggplot never auto-resizes nodes by throughput the way a "real" Sankey
+  # layout engine does, so this needs no layoutIterations-style override.
+  y_of <- function(ids) {
+    n <- length(ids)
+    y <- if (n <= 1) 0.5 else rev(seq(0.02, 0.98, length.out = n))
+    stats::setNames(y, ids)
+  }
+  src_y <- y_of(src_ids)
+  tgt_y <- y_of(tgt_ids)
+
+  x_src <- 0
+  x_tgt <- 1
+  half_h <- 0.35 * min(
+    if (length(src_ids) > 1) diff(range(src_y)) / (length(src_ids) - 1) else 1,
+    if (length(tgt_ids) > 1) diff(range(tgt_y)) / (length(tgt_ids) - 1) else 1
+  )
+
+  nodes <- rbind(
+    data.frame(id = src_ids, x = x_src, y = unname(src_y[src_ids]),
+              side = "src", stringsAsFactors = FALSE),
+    data.frame(id = tgt_ids, x = x_tgt, y = unname(tgt_y[tgt_ids]),
+              side = "tgt", stringsAsFactors = FALSE)
+  )
+  nodes$label_full <- unname(label_of[nodes$id])
+  nodes$label_trunc <- substr(nodes$label_full, 1, 30)
+
+  links <- if (nrow(e)) {
+    do.call(rbind, lapply(seq_len(nrow(e)), function(i) {
+      pts <- .sankey_curve_points(
+        x_src, x_tgt, unname(src_y[e$id_a[i]]), unname(tgt_y[e$id_b[i]])
+      )
+      pts$link_id <- i
+      pts$value <- e$value[i]
+      pts
+    }))
+  } else {
+    data.frame(x = numeric(0), y = numeric(0), link_id = integer(0),
+              value = numeric(0))
+  }
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_path(
+      data = links,
+      ggplot2::aes(x = x, y = y, group = link_id, linewidth = value),
+      color = "grey45", alpha = 0.35, lineend = "round"
+    ) +
+    ggplot2::scale_linewidth(range = c(0.15, 2.5), guide = "none") +
+    ggplot2::geom_segment(
+      data = nodes,
+      ggplot2::aes(x = x, xend = x, y = y - half_h, yend = y + half_h,
+                  color = side),
+      linewidth = 3.5
+    ) +
+    ggplot2::scale_color_manual(
+      values = c(src = "#2563eb", tgt = "#16a34a"), guide = "none"
+    ) +
+    ggplot2::geom_text(
+      data = nodes[nodes$side == "src", ],
+      ggplot2::aes(x = x - 0.015, y = y, label = label_trunc),
+      hjust = 1, size = 2.6
+    ) +
+    ggplot2::geom_text(
+      data = nodes[nodes$side == "tgt", ],
+      ggplot2::aes(x = x + 0.015, y = y, label = label_trunc),
+      hjust = 0, size = 2.6
+    ) +
+    ggplot2::coord_cartesian(xlim = c(-0.3, 1.3), clip = "off") +
+    ggplot2::labs(
+      title = sprintf("%s → %s (top %d per node, by %s)",
+                      source_keyset, target_keyset, top_n, value_col)
+    ) +
+    ggplot2::theme_void(base_size = 11) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(hjust = 0.5),
+      plot.margin = ggplot2::margin(t = 15, l = 130, r = 130, b = 5),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA)
+    )
+
+  n_rows <- max(length(src_ids), length(tgt_ids))
+  save_ggplot_png(p, name, figures_dir,
+                  width = 10, height = max(6, 0.16 * n_rows), dpi = 150)
+  p
 }
 
 # ---- Keyset x keyset aggregate heatmap ------------------------------------

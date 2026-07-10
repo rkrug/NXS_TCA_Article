@@ -274,7 +274,8 @@ SPECTER2). Two definitions link if their *wording/concepts* are close.
 
 ```{r}
 #| label: fig-sankey-stage1
-tar_read(viz_sankey_stage1_fig)
+#| fig-height: 12
+tar_read(viz_sankey_stage1_ggplot_fig)
 ```
 
 ```{r}
@@ -290,7 +291,8 @@ overlap of the resolved cited-work sets (only pairs sharing ≥1 work).
 
 ```{r}
 #| label: fig-sankey-stage2
-tar_read(viz_sankey_stage2_fig)
+#| fig-height: 12
+tar_read(viz_sankey_stage2_ggplot_fig)
 ```
 
 ```{r}
@@ -307,7 +309,8 @@ mean pairwise cosine between the two definitions' cited-work embedding sets
 
 ```{r}
 #| label: fig-sankey-stage3
-tar_read(viz_sankey_stage3_fig)
+#| fig-height: 12
+tar_read(viz_sankey_stage3_ggplot_fig)
 ```
 
 ```{r}
