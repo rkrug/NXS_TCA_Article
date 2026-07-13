@@ -2355,7 +2355,7 @@ build_viz_citation_score_data <- function(
   score_rng <- range(joined$score, na.rm = TRUE)
   score_brks <- seq(score_rng[1], score_rng[2], length.out = score_bins + 1L)
 
-  joined |>
+  binned <- joined |>
     dplyr::mutate(
       log_cit_plus1 = log10(cited_by_count + 1),
       cit_bin = cut(
@@ -2365,24 +2365,69 @@ build_viz_citation_score_data <- function(
         labels = FALSE
       ),
       score_bin = cut(score, score_brks, include.lowest = TRUE, labels = FALSE)
-    ) |>
+    )
+
+  hist <- binned |>
     dplyr::count(variant, cit_bin, score_bin) |>
     dplyr::mutate(
       x_mid = (cit_brks[cit_bin] + cit_brks[cit_bin + 1L]) / 2,
       y_mid = (score_brks[score_bin] + score_brks[score_bin + 1L]) / 2
     )
+
+  # Per-citation-bin mean/median score — the trendline, mirroring the
+  # publication-year figure's per-year stats.
+  stats <- binned |>
+    dplyr::summarise(
+      mean_score = mean(score, na.rm = TRUE),
+      median_score = stats::median(score, na.rm = TRUE),
+      .by = c(variant, cit_bin)
+    ) |>
+    dplyr::mutate(x_mid = (cit_brks[cit_bin] + cit_brks[cit_bin + 1L]) / 2) |>
+    dplyr::arrange(variant, cit_bin)
+
+  list(hist = hist, stats = stats)
 }
 
 build_viz_citation_score_fig <- function(
   cit_score_data,
   figures_dir = "output/figures"
 ) {
-  p <- ggplot2::ggplot(
-    cit_score_data,
-    ggplot2::aes(x = x_mid, y = y_mid, fill = n)
-  ) +
-    ggplot2::geom_tile() +
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_tile(
+      data = cit_score_data$hist,
+      ggplot2::aes(x = x_mid, y = y_mid, fill = n)
+    ) +
+    ggplot2::geom_line(
+      data = cit_score_data$stats,
+      ggplot2::aes(x = x_mid, y = mean_score, colour = "mean"),
+      linewidth = 1.2
+    ) +
+    ggplot2::geom_line(
+      data = cit_score_data$stats,
+      ggplot2::aes(x = x_mid, y = median_score, colour = "median"),
+      linewidth = 1.2,
+      linetype = "dashed"
+    ) +
+    ggplot2::geom_point(
+      data = cit_score_data$stats,
+      ggplot2::aes(x = x_mid, y = mean_score),
+      colour = "#FF3300",
+      size = 1.6
+    ) +
+    ggplot2::geom_point(
+      data = cit_score_data$stats,
+      ggplot2::aes(x = x_mid, y = median_score),
+      colour = "#FFCC00",
+      size = 1.6
+    ) +
     ggplot2::scale_fill_viridis_c(trans = "log10", name = "Works\n(log)") +
+    ggplot2::scale_colour_manual(
+      name = NULL,
+      values = c(mean = "#FF3300", median = "#FFCC00"),
+      guide = ggplot2::guide_legend(
+        override.aes = list(linetype = c("solid", "dashed"), linewidth = 1.2)
+      )
+    ) +
     ggplot2::facet_wrap(~variant, ncol = 3) +
     ggplot2::labs(
       x = "log10(cited_by_count + 1)",
