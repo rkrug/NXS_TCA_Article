@@ -262,59 +262,100 @@ Inputs to keypaper-set curation.*
 
 How do the concept definitions link *to one another* across the four key-sets
 (the worksheet groups: `TCA_Annex_3_3`, `TCA_Approaches_3_2`,
-`TCA_Actions_Ch5`, `Nexus_Response_Options`)? Of particular interest is the
-link between **TCA Action → Nexus Response Option**. Three complementary
-similarity signals are used, each with a Sankey (top 3 targets per source node,
-Action → Response Option) and a keyset × keyset mean-similarity matrix.
+`TCA_Actions_Ch5`, `Nexus_Response_Options`)? Two directed links are of
+particular interest — **TCA Action → Nexus Response Option** and
+**TCA Approaches → TCA Action** — each shown below as a set of Sankeys (top 3
+targets per source node). Three complementary similarity signals drive them:
 
-## Stage 1 — definition-text similarity (embeddings)
+- **Stage 1 — definition-text similarity (embeddings):** cosine similarity
+  between the keypaper definition embeddings (title_abstract, SPECTER2). Two
+  definitions link if their *wording/concepts* are close.
+- **Stage 2 — cited-literature overlap (no embeddings):** two definitions link
+  if they *cite the same works* — Jaccard overlap of the resolved cited-work
+  sets (only pairs sharing ≥1 work).
+- **Stage 3 — cited-literature embedding similarity:** two definitions link if
+  the *literature they cite* is semantically close — mean pairwise cosine
+  between the two definitions' cited-work embedding sets (computed as the dot
+  product of their unit-vector centroids).
 
-Cosine similarity between the keypaper definition embeddings (title_abstract,
-SPECTER2). Two definitions link if their *wording/concepts* are close.
+## Keyset × keyset overview
 
-```{r}
-#| label: fig-sankey-stage1
-#| fig-height: 12
-tar_read(viz_sankey_stage1_ggplot_fig)
-```
+Each Sankey below isolates one source → target keyset pair. These matrices give
+the whole picture: the mean similarity between *every* pair of key-sets, per
+signal stage (read a row against the columns).
 
 ```{r}
 #| label: fig-keyset-matrix-stage1
-#| fig-cap: "Keyset × keyset mean definition-embedding cosine similarity."
+#| fig-cap: "Stage 1 — keyset × keyset mean definition-embedding cosine similarity."
 tar_read(viz_keyset_matrix_stage1_fig)
-```
-
-## Stage 2 — cited-literature overlap (no embeddings)
-
-Two definitions link if they *cite the same works*. Edges are the Jaccard
-overlap of the resolved cited-work sets (only pairs sharing ≥1 work).
-
-```{r}
-#| label: fig-sankey-stage2
-#| fig-height: 12
-tar_read(viz_sankey_stage2_ggplot_fig)
 ```
 
 ```{r}
 #| label: fig-keyset-matrix-stage2
-#| fig-cap: "Keyset × keyset mean Jaccard overlap of cited-work sets."
+#| fig-cap: "Stage 2 — keyset × keyset mean Jaccard overlap of cited-work sets."
 tar_read(viz_keyset_matrix_stage2_fig)
-```
-
-## Stage 3 — cited-literature embedding similarity
-
-Two definitions link if the *literature they cite* is semantically close —
-mean pairwise cosine between the two definitions' cited-work embedding sets
-(computed as the dot product of their unit-vector centroids).
-
-```{r}
-#| label: fig-sankey-stage3
-#| fig-height: 12
-tar_read(viz_sankey_stage3_ggplot_fig)
 ```
 
 ```{r}
 #| label: fig-keyset-matrix-stage3
-#| fig-cap: "Keyset × keyset mean cited-literature embedding similarity."
+#| fig-cap: "Stage 3 — keyset × keyset mean cited-literature embedding similarity."
 tar_read(viz_keyset_matrix_stage3_fig)
+```
+
+## TCA Action ↔ Nexus Response Options
+
+Directed **TCA Action → Nexus Response Option**: for each Action, its top 3
+most-similar Response Options under each signal stage.
+
+### Stage 1 — definition-text similarity (embeddings)
+
+```{r}
+#| label: fig-sankey-act-resp-stage1
+#| fig-height: 12
+tar_read(viz_sankey_act_resp_stage1_ggplot_fig)
+```
+
+### Stage 2 — cited-literature overlap (no embeddings)
+
+```{r}
+#| label: fig-sankey-act-resp-stage2
+#| fig-height: 12
+tar_read(viz_sankey_act_resp_stage2_ggplot_fig)
+```
+
+### Stage 3 — cited-literature embedding similarity
+
+```{r}
+#| label: fig-sankey-act-resp-stage3
+#| fig-height: 12
+tar_read(viz_sankey_act_resp_stage3_ggplot_fig)
+```
+
+## TCA Approaches ↔ TCA Actions Ch5
+
+Directed **TCA Approaches → TCA Action**: for each Approach, its top 3
+most-similar Actions under each signal stage.
+
+### Stage 1 — definition-text similarity (embeddings)
+
+```{r}
+#| label: fig-sankey-appr-act-stage1
+#| fig-height: 12
+tar_read(viz_sankey_appr_act_stage1_ggplot_fig)
+```
+
+### Stage 2 — cited-literature overlap (no embeddings)
+
+```{r}
+#| label: fig-sankey-appr-act-stage2
+#| fig-height: 12
+tar_read(viz_sankey_appr_act_stage2_ggplot_fig)
+```
+
+### Stage 3 — cited-literature embedding similarity
+
+```{r}
+#| label: fig-sankey-appr-act-stage3
+#| fig-height: 12
+tar_read(viz_sankey_appr_act_stage3_ggplot_fig)
 ```

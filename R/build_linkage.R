@@ -293,6 +293,7 @@ build_sankey_fig_ggplot <- function(edge_data,
                                     source_keyset = "TCA_Actions_Ch5",
                                     target_keyset = "Nexus_Response_Options",
                                     top_n = 3,
+                                    color_by_value = FALSE,
                                     figures_dir = "output/figures") {
   meta <- .keypaper_meta(key_works)
   title_lbl <- ifelse(is.na(meta$title) | !nzchar(meta$title), meta$id,
@@ -362,21 +363,43 @@ build_sankey_fig_ggplot <- function(edge_data,
               value = numeric(0))
   }
 
-  p <- ggplot2::ggplot() +
-    ggplot2::geom_path(
-      data = links,
-      ggplot2::aes(x = x, y = y, group = link_id, linewidth = value),
-      color = "grey45", alpha = 0.35, lineend = "round"
-    ) +
+  # Nodes are drawn with hardcoded colours (not via an aes colour scale) so the
+  # single ggplot colour scale is free for the links when color_by_value=TRUE.
+  p <- ggplot2::ggplot()
+  if (color_by_value) {
+    p <- p +
+      ggplot2::geom_path(
+        data = links,
+        ggplot2::aes(x = x, y = y, group = link_id, linewidth = value,
+                    color = value),
+        alpha = 0.6, lineend = "round"
+      ) +
+      ggplot2::scale_color_viridis_c(
+        name = value_col,
+        guide = ggplot2::guide_colorbar(
+          direction = "horizontal", title.position = "top",
+          barwidth = grid::unit(6, "cm")
+        )
+      )
+  } else {
+    p <- p +
+      ggplot2::geom_path(
+        data = links,
+        ggplot2::aes(x = x, y = y, group = link_id, linewidth = value),
+        color = "grey45", alpha = 0.35, lineend = "round"
+      )
+  }
+  p <- p +
     ggplot2::scale_linewidth(range = c(0.15, 2.5), guide = "none") +
     ggplot2::geom_segment(
-      data = nodes,
-      ggplot2::aes(x = x, xend = x, y = y - half_h, yend = y + half_h,
-                  color = side),
-      linewidth = 3.5
+      data = nodes[nodes$side == "src", ],
+      ggplot2::aes(x = x, xend = x, y = y - half_h, yend = y + half_h),
+      color = "#2563eb", linewidth = 3.5
     ) +
-    ggplot2::scale_color_manual(
-      values = c(src = "#2563eb", tgt = "#16a34a"), guide = "none"
+    ggplot2::geom_segment(
+      data = nodes[nodes$side == "tgt", ],
+      ggplot2::aes(x = x, xend = x, y = y - half_h, yend = y + half_h),
+      color = "#16a34a", linewidth = 3.5
     ) +
     ggplot2::geom_text(
       data = nodes[nodes$side == "src", ],
@@ -398,7 +421,8 @@ build_sankey_fig_ggplot <- function(edge_data,
       plot.title = ggplot2::element_text(hjust = 0.5),
       plot.margin = ggplot2::margin(t = 15, l = 130, r = 130, b = 5),
       plot.background = ggplot2::element_rect(fill = "white", color = NA),
-      panel.background = ggplot2::element_rect(fill = "white", color = NA)
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      legend.position = if (color_by_value) "bottom" else "none"
     )
 
   n_rows <- max(length(src_ids), length(tgt_ids))

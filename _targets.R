@@ -941,22 +941,60 @@ list(
     format = qs2_format()
   )
   ),
+  # Static ggplot Sankeys, two source->target keyset pairs. Each pair gets the
+  # three signal stages (definition embedding / citation overlap / cited
+  # embedding). build_sankey_fig_ggplot() defaults to Action -> Response Option,
+  # so the second pair passes source/target_keyset explicitly.
+  # -- Pair A: TCA Action -> Nexus Response Option --
+  # The two embedding-similarity stages (1 = definition text, 3 = cited
+  # literature) show top 5 targets per node with links coloured by similarity;
+  # stage 2 (citation-overlap Jaccard, not an embedding signal) stays top 3,
+  # uncoloured.
   tar_target(
-    viz_sankey_stage1_ggplot_fig,
+    viz_sankey_act_resp_stage1_ggplot_fig,
     build_sankey_fig_ggplot(link_stage1, key_works, value_col = "sim",
-                            name = "sankey_stage1_definition_embedding_ggplot"),
+                            top_n = 5, color_by_value = TRUE,
+                            name = "sankey_act_resp_stage1_definition_embedding_ggplot"),
     format = qs2_format()
   ),
   tar_target(
-    viz_sankey_stage2_ggplot_fig,
+    viz_sankey_act_resp_stage2_ggplot_fig,
     build_sankey_fig_ggplot(link_stage2, key_works, value_col = "jaccard",
-                            name = "sankey_stage2_citation_overlap_ggplot"),
+                            name = "sankey_act_resp_stage2_citation_overlap_ggplot"),
     format = qs2_format()
   ),
   tar_target(
-    viz_sankey_stage3_ggplot_fig,
+    viz_sankey_act_resp_stage3_ggplot_fig,
     build_sankey_fig_ggplot(link_stage3, key_works, value_col = "sim",
-                            name = "sankey_stage3_cited_embedding_ggplot"),
+                            top_n = 5, color_by_value = TRUE,
+                            name = "sankey_act_resp_stage3_cited_embedding_ggplot"),
+    format = qs2_format()
+  ),
+  # -- Pair B: TCA Approaches -> TCA Action --
+  tar_target(
+    viz_sankey_appr_act_stage1_ggplot_fig,
+    build_sankey_fig_ggplot(link_stage1, key_works, value_col = "sim",
+                            source_keyset = "TCA_Approaches_3_2",
+                            target_keyset = "TCA_Actions_Ch5",
+                            top_n = 5, color_by_value = TRUE,
+                            name = "sankey_appr_act_stage1_definition_embedding_ggplot"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_appr_act_stage2_ggplot_fig,
+    build_sankey_fig_ggplot(link_stage2, key_works, value_col = "jaccard",
+                            source_keyset = "TCA_Approaches_3_2",
+                            target_keyset = "TCA_Actions_Ch5",
+                            name = "sankey_appr_act_stage2_citation_overlap_ggplot"),
+    format = qs2_format()
+  ),
+  tar_target(
+    viz_sankey_appr_act_stage3_ggplot_fig,
+    build_sankey_fig_ggplot(link_stage3, key_works, value_col = "sim",
+                            source_keyset = "TCA_Approaches_3_2",
+                            target_keyset = "TCA_Actions_Ch5",
+                            top_n = 5, color_by_value = TRUE,
+                            name = "sankey_appr_act_stage3_cited_embedding_ggplot"),
     format = qs2_format()
   ),
   tar_target(
