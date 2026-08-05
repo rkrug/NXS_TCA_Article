@@ -459,3 +459,115 @@ build_keyset_matrix_fig <- function(edge_data, value_col, name,
   save_ggplot_png(p, name, figures_dir, width = 8, height = 6.5)
   p
 }
+
+# ---- Pair-level (keypaper x keypaper) heatmap for one keyset pair ---------
+# Every source-keyset x target-keyset keypaper pair (not just the top-N shown
+# by the Sankey), plus a "real vs chance" flag: the background/null is the
+# empirical distribution of this stage's value across ALL keypaper pairs in
+# the whole corpus (edge_data), zero-padded to account for pairs stage 2
+# drops (build_link_stage2_data() only emits rows with >=1 shared cited
+# work). Shuffling which keypaper carries which vector/cited-set and
+# recomputing the pairwise value is equivalent to drawing from that same
+# already-materialised population, so this needs no permutation loop.
+build_pair_heatmap_data <- function(edge_data, key_works, value_col,
+                                    source_keyset, target_keyset) {
+  meta <- .keypaper_meta(key_works)
+  title_lbl <- ifelse(is.na(meta$title) | !nzchar(meta$title), meta$id,
+                       substr(meta$title, 1, 60))
+  has_code <- !is.na(meta$code) & nzchar(meta$code)
+  label_of <- stats::setNames(
+    ifelse(has_code, paste(meta$code, title_lbl), title_lbl),
+    meta$id
+  )
+
+  # Keypapers with zero data for this stage anywhere (e.g. no resolved
+  # citations at all for stage 2/3) never appear in edge_data and are
+  # dropped, same convention build_sankey_fig_ggplot() relies on.
+  present_ids <- unique(c(edge_data$id_a, edge_data$id_b))
+  src_ids <- meta$id[meta$keyset == source_keyset & meta$id %in% present_ids]
+  tgt_ids <- meta$id[meta$keyset == target_keyset & meta$id %in% present_ids]
+
+  grid <- expand.grid(id_a = src_ids, id_b = tgt_ids, stringsAsFactors = FALSE)
+  observed <- edge_data[edge_data$id_a %in% src_ids &
+                           edge_data$id_b %in% tgt_ids,
+                        c("id_a", "id_b", value_col)]
+  d <- dplyr::left_join(grid, observed, by = c("id_a", "id_b"))
+  d[[value_col]][is.na(d[[value_col]])] <- 0
+
+  # Zero-inflation-corrected background: append the pairs stage 2 dropped
+  # (value 0) to the observed edge values. No-op for the already-dense
+  # stage 1 / stage 3 edge lists (n_missing == 0).
+  n_nodes <- length(present_ids)
+  bg_raw <- as.numeric(edge_data[[value_col]])
+  n_missing <- max(n_nodes * (n_nodes - 1) - length(bg_raw), 0)
+  bg <- c(bg_raw, rep(0, n_missing))
+
+  # Mid-rank percentile (mean(bg < v) + 0.5*mean(bg == v)): plain mean(bg<=v)
+  # would put every pair at v==0 above the 95th percentile whenever the
+  # zero-inflation-corrected background is itself >95% zero (stage 2), since
+  # then even a "no overlap" cell counts as "beating" nearly all of bg.
+  d$percentile <- vapply(
+    d[[value_col]],
+    function(v) mean(bg < v) + 0.5 * mean(bg == v),
+    numeric(1)
+  )
+  d$real_diff <- d$percentile >= 0.95
+  d$label_a <- unname(label_of[d$id_a])
+  d$label_b <- unname(label_of[d$id_b])
+  tibble::as_tibble(d)
+}
+
+build_pair_heatmap_fig <- function(edge_data, key_works, value_col, name,
+                                   source_keyset, target_keyset,
+                                   figures_dir = "output/figures") {
+  d <- build_pair_heatmap_data(edge_data, key_works, value_col,
+                               source_keyset, target_keyset)
+
+  # Cell fill spans the full viridis range even though the underlying values
+  # are tightly clustered (e.g. stage 1 sim in [0.86, 0.97]), so dark-purple
+  # cells need white text and yellow cells need black text -- a single fixed
+  # label colour is unreadable at one end or the other. Map each value
+  # through the same viridis palette scale_fill_viridis_c() will use, then
+  # pick text colour by the resulting cell's relative luminance.
+  pal <- viridisLite::viridis(256)
+  idx <- pmax(1, pmin(256, round(scales::rescale(d[[value_col]]) * 255) + 1))
+  cell_rgb <- grDevices::col2rgb(pal[idx]) / 255
+  luminance <- 0.2126 * cell_rgb["red", ] + 0.7152 * cell_rgb["green", ] +
+    0.0722 * cell_rgb["blue", ]
+  d$text_color <- ifelse(luminance > 0.5, "black", "white")
+
+  p <- ggplot2::ggplot(
+    d, ggplot2::aes(x = label_a, y = label_b, fill = .data[[value_col]])
+  ) +
+    ggplot2::geom_tile(
+      ggplot2::aes(color = real_diff, linewidth = real_diff)
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("%.2f", .data[[value_col]])),
+      color = d$text_color, size = 2.3
+    ) +
+    ggplot2::scale_fill_viridis_c(name = value_col) +
+    ggplot2::scale_color_manual(
+      values = c(`TRUE` = "black", `FALSE` = NA), guide = "none"
+    ) +
+    ggplot2::scale_linewidth_manual(
+      values = c(`TRUE` = 0.9, `FALSE` = 0.1), guide = "none"
+    ) +
+    ggplot2::labs(
+      x = paste0(source_keyset, " (source)"),
+      y = paste0(target_keyset, " (target)"),
+      title = paste0(source_keyset, " × ", target_keyset, " — ", value_col),
+      subtitle = stringr::str_wrap(paste0(
+        "Black border = above the 95th percentile of all corpus-wide ",
+        "keypaper pairs for this measure (unlikely by chance); no border = ",
+        "indistinguishable from typical background similarity"
+      ), width = 85)
+    ) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 30, hjust = 1),
+      panel.grid = ggplot2::element_blank()
+    )
+  save_ggplot_png(p, name, figures_dir, width = 8, height = 10)
+  p
+}

@@ -336,12 +336,25 @@ tar_read(viz_sankey_act_resp_stage3_ggplot_fig)
 Directed **TCA Approaches → TCA Action**: for each Approach, its top 3
 most-similar Actions under each signal stage.
 
+The Sankeys above only show each Approach's top matches; the heatmaps below
+show every Approach × Action pair for all three signals. Black borders mark
+cells scoring above the 95th percentile of that measure's corpus-wide
+pairwise distribution — i.e. a stronger link than typical, and unlikely to be
+chance; unbordered cells are indistinguishable from background.
+
 ### Stage 1 — definition-text similarity (embeddings)
 
 ```{r}
 #| label: fig-sankey-appr-act-stage1
 #| fig-height: 12
 tar_read(viz_sankey_appr_act_stage1_ggplot_fig)
+```
+
+```{r}
+#| label: fig-pair-heatmap-appr-act-stage1
+#| fig-cap: "Approach × Action, Stage 1 (definition-text cosine similarity). Black border = above the 95th percentile of all corpus-wide Stage 1 pairwise values."
+#| fig-height: 10
+tar_read(viz_pair_heatmap_appr_act_stage1_fig)
 ```
 
 ### Stage 2 — cited-literature overlap (no embeddings)
@@ -352,10 +365,24 @@ tar_read(viz_sankey_appr_act_stage1_ggplot_fig)
 tar_read(viz_sankey_appr_act_stage2_ggplot_fig)
 ```
 
+```{r}
+#| label: fig-pair-heatmap-appr-act-stage2
+#| fig-cap: "Approach × Action, Stage 2 (cited-literature Jaccard overlap). Black border = above the 95th percentile of all corpus-wide Stage 2 pairwise values (background includes the many zero-overlap pairs)."
+#| fig-height: 10
+tar_read(viz_pair_heatmap_appr_act_stage2_fig)
+```
+
 ### Stage 3 — cited-literature embedding similarity
 
 ```{r}
 #| label: fig-sankey-appr-act-stage3
 #| fig-height: 12
 tar_read(viz_sankey_appr_act_stage3_ggplot_fig)
+```
+
+```{r}
+#| label: fig-pair-heatmap-appr-act-stage3
+#| fig-cap: "Approach × Action, Stage 3 (cited-literature embedding similarity). Black border = above the 95th percentile of all corpus-wide Stage 3 pairwise values."
+#| fig-height: 10
+tar_read(viz_pair_heatmap_appr_act_stage3_fig)
 ```
