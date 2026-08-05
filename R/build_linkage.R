@@ -571,3 +571,169 @@ build_pair_heatmap_fig <- function(edge_data, key_works, value_col, name,
   save_ggplot_png(p, name, figures_dir, width = 8, height = 10)
   p
 }
+
+# ---- Combined Stage 1 + Stage 2 heatmap (equal-weight blend) --------------
+# Stage 3 (cited-literature embedding similarity) is left out: for this pair
+# it never clears the 95th-percentile bar and sits in a narrow band, i.e. it
+# carries no distinguishing signal here.
+build_pair_heatmap_combined_data <- function(link_stage1, link_stage2, key_works,
+                                             source_keyset, target_keyset) {
+  d1 <- build_pair_heatmap_data(link_stage1, key_works, "sim",
+                                source_keyset, target_keyset)
+  d2 <- build_pair_heatmap_data(link_stage2, key_works, "jaccard",
+                                source_keyset, target_keyset)
+  d <- dplyr::inner_join(
+    d1[, c("id_a", "id_b", "label_a", "label_b", "sim", "percentile", "real_diff")],
+    d2[, c("id_a", "id_b", "jaccard", "percentile", "real_diff")],
+    by = c("id_a", "id_b"),
+    suffix = c("_stage1", "_stage2")
+  )
+  # sim (~[0.86, 0.97]) and jaccard ([0, 0.09]) are not on comparable scales,
+  # so averaging the raw values would let stage 1 dominate. percentile_* is
+  # already each stage's own value expressed as a 0-1 rank against its own
+  # corpus-wide background (build_pair_heatmap_data()) -- a common unit -- so
+  # the mean of the two percentiles is a genuine equal-weight blend.
+  d$combined <- (d$percentile_stage1 + d$percentile_stage2) / 2
+  d$n_agree <- d$real_diff_stage1 + d$real_diff_stage2
+  d
+}
+
+build_pair_heatmap_combined_fig <- function(link_stage1, link_stage2, key_works,
+                                            name, source_keyset, target_keyset,
+                                            figures_dir = "output/figures") {
+  d <- build_pair_heatmap_combined_data(link_stage1, link_stage2, key_works,
+                                        source_keyset, target_keyset)
+
+  # Discrete axes need numeric positions so three labels can be placed per
+  # tile (center/bottom-left/bottom-right); alphabetical order matches
+  # build_pair_heatmap_fig()'s default (ggplot's discrete-axis ordering).
+  x_levels <- sort(unique(d$label_a))
+  y_levels <- sort(unique(d$label_b))
+  d$xn <- match(d$label_a, x_levels)
+  d$yn <- match(d$label_b, y_levels)
+
+  # The combined score is a continuous blend, but "at least one stage links
+  # this pair" (n_agree >= 1) vs "neither does" (n_agree == 0) is a real
+  # split in it: the max combined value among unlinked pairs sits just below
+  # the min combined value among linked ones (verified empirically -- the two
+  # groups don't interleave, leaving a narrow data-free gap between them).
+  # A plain 3-stop diverging gradient wastes most of its visible contrast on
+  # that gap, where no cell actually lands, leaving every real cell looking
+  # washed-out near-white. Instead build a 4-stop scale whose two middle
+  # knots sit exactly at the two group extremes: colour barely changes while
+  # scanning across each group's own range (knot 1->2, knot 3->4), then jumps
+  # sharply from light-blue to light-red across the knot-2->3 gap that no
+  # cell occupies -- so every cell reads clearly as one side or the other.
+  none_max <- suppressWarnings(max(d$combined[d$n_agree == 0], na.rm = TRUE))
+  linked_min <- suppressWarnings(min(d$combined[d$n_agree >= 1], na.rm = TRUE))
+  rng <- range(d$combined, na.rm = TRUE)
+  if (is.finite(none_max) && is.finite(linked_min) && none_max < linked_min) {
+    knots <- c(rng[1], none_max, linked_min, rng[2])
+  } else {
+    # No clean split (or only one group present): fall back to a small
+    # nominal jump straddling the median instead of a real empirical gap.
+    mid <- stats::median(d$combined, na.rm = TRUE)
+    gap <- max(diff(rng) * 0.01, .Machine$double.eps)
+    knots <- sort(unique(c(
+      rng[1], min(mid - gap / 2, rng[2]), max(mid + gap / 2, rng[1]), rng[2]
+    )))
+  }
+
+  # Reuse the same diverging hues as the Cliff's delta figures
+  # (build_viz_chapter_cliffs_delta_fig()) for a consistent visual language,
+  # but skip the washed-out white midpoint -- the jump itself marks "no data
+  # falls here", so the two inner knots are already light-toned colour, not
+  # white.
+  div_colors <- c("#2166AC", "#92C5DE", "#F4A582", "#B2182B")
+  knot_pos <- scales::rescale(knots)
+  pal_fun <- scales::gradient_n_pal(div_colors, values = knot_pos)
+  cell_colors <- pal_fun(scales::rescale(d$combined, from = rng))
+  cell_rgb <- grDevices::col2rgb(cell_colors) / 255
+  luminance <- 0.2126 * cell_rgb["red", ] + 0.7152 * cell_rgb["green", ] +
+    0.0722 * cell_rgb["blue", ]
+  d$text_color <- ifelse(luminance > 0.5, "black", "white")
+
+  d$agreement <- factor(
+    d$n_agree, levels = c(0, 1, 2), labels = c("neither", "one", "both")
+  )
+
+  # Bold only the numbers that themselves indicate a real link (above that
+  # measure's own 95th percentile); the center combined number bolds
+  # whenever either component does, matching when a border is drawn at all.
+  fontface_combined <- ifelse(d$n_agree >= 1, "bold", "plain")
+  fontface_sim <- ifelse(d$real_diff_stage1, "bold", "plain")
+  fontface_jaccard <- ifelse(d$real_diff_stage2, "bold", "plain")
+
+  p <- ggplot2::ggplot(d, ggplot2::aes(x = xn, y = yn)) +
+    ggplot2::geom_tile(
+      ggplot2::aes(
+        fill = combined, color = agreement, linewidth = agreement,
+        linetype = agreement
+      ),
+      width = 1, height = 1
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("%.2f", combined)),
+      color = d$text_color, fontface = fontface_combined, size = 3.4
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(x = xn - 0.28, y = yn - 0.32, label = sprintf("%.2f", sim)),
+      color = d$text_color, fontface = fontface_sim, size = 2
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(x = xn + 0.28, y = yn - 0.32, label = sprintf("%.2f", jaccard)),
+      color = d$text_color, fontface = fontface_jaccard, size = 2
+    ) +
+    ggplot2::scale_fill_gradientn(
+      name = "combined\n(mean percentile)",
+      colours = div_colors, values = knot_pos, limits = rng
+    ) +
+    # A grey/lighter border reads poorly against the mid-tone viridis fills,
+    # so both tiers stay solid black; "one stage only" is distinguished by a
+    # dashed rather than solid outline instead of a weaker colour.
+    ggplot2::scale_color_manual(
+      values = c(neither = NA, one = "black", both = "black"), guide = "none"
+    ) +
+    ggplot2::scale_linewidth_manual(
+      values = c(neither = 0.1, one = 0.6, both = 1.1), guide = "none"
+    ) +
+    ggplot2::scale_linetype_manual(
+      values = c(neither = "solid", one = "dashed", both = "solid"),
+      guide = "none"
+    ) +
+    ggplot2::scale_x_continuous(
+      breaks = seq_along(x_levels), labels = x_levels,
+      expand = ggplot2::expansion(add = 0.6)
+    ) +
+    ggplot2::scale_y_continuous(
+      breaks = seq_along(y_levels), labels = y_levels,
+      expand = ggplot2::expansion(add = 0.6)
+    ) +
+    ggplot2::labs(
+      x = paste0(source_keyset, " (source)"),
+      y = paste0(target_keyset, " (target)"),
+      title = stringr::str_wrap(paste0(
+        source_keyset, " × ", target_keyset,
+        " — combined (Stage 1 + Stage 2, equal weight)"
+      ), width = 55),
+      subtitle = stringr::str_wrap(paste0(
+        "Center (large) = mean of each stage's own percentile rank ",
+        "(equal-weight blend). Bottom-left (small) = Stage 1 definition-text ",
+        "cosine similarity; bottom-right (small) = Stage 2 cited-literature ",
+        "Jaccard overlap. Bold = that value is itself above its measure's ",
+        "95th percentile (a real link). Solid border = both stages agree; ",
+        "dashed border = one stage only; no border = neither. Fill jumps ",
+        "sharply from light blue to light red across the gap (",
+        sprintf("%.2f", knots[2]), "-", sprintf("%.2f", knots[3]),
+        ") that separates \"neither stage links this pair\" (blue) from ",
+        "\"at least one does\" (red) -- no cell actually falls in that gap."
+      ), width = 85)
+    ) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 30, hjust = 1),
+      panel.grid = ggplot2::element_blank()
+    )
+  save_ggplot_png(p, name, figures_dir, width = 8, height = 10)
+  p
+}

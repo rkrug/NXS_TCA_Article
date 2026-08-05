@@ -1039,6 +1039,14 @@ list(
                            name = "pair_heatmap_appr_act_stage3"),
     format = qs2_format()
   ),
+  tar_target(
+    viz_pair_heatmap_appr_act_combined_fig,
+    build_pair_heatmap_combined_fig(link_stage1, link_stage2, key_works,
+                                    source_keyset = "TCA_Approaches_3_2",
+                                    target_keyset = "TCA_Actions_Ch5",
+                                    name = "pair_heatmap_appr_act_combined"),
+    format = qs2_format()
+  ),
 
   # ---- Citation method comparison (regex vs LLM) --------------------------
   tar_target(
