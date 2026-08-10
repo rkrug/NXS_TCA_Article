@@ -271,12 +271,17 @@ targets per source node). Three complementary similarity signals drive them:
   between the keypaper definition embeddings (title_abstract, SPECTER2). Two
   definitions link if their *wording/concepts* are close.
 - **Stage 2 — cited-literature overlap (no embeddings):** two definitions link
-  if they *cite the same works* — Jaccard overlap of the resolved cited-work
-  sets (only pairs sharing ≥1 work).
+  if they *cite the same works* — Jaccard overlap (Jaccard 1912) of the
+  resolved cited-work sets (only pairs sharing ≥1 work).
 - **Stage 3 — cited-literature embedding similarity:** two definitions link if
   the *literature they cite* is semantically close — mean pairwise cosine
   between the two definitions' cited-work embedding sets (computed as the dot
   product of their unit-vector centroids).
+
+Jaccard, P. (1912). The distribution of the flora in the alpine zone.
+*New Phytologist*, 11(2), 37–50.
+<https://doi.org/10.1111/j.1469-8137.1912.tb05611.x> (the "coefficient of
+community", defined on p. 39: species common to both / total species in both).
 
 ## Keyset × keyset overview
 
@@ -393,16 +398,24 @@ Stage 3 carries no distinguishing signal for this pair (no cell above), so
 it's left out here. Each cell blends Stage 1 and Stage 2 as equal-weight
 indicators — each stage's value expressed as a percentile rank against its
 own corpus-wide background, then averaged, so neither measure's raw scale
-dominates. Center number (large) = the combined score; bottom-left (small)
-= Stage 1 definition-text similarity; bottom-right (small) = Stage 2
-citation-overlap Jaccard. **Bold** marks a value that is itself above its
-own measure's 95th percentile (a real link); the center number is bold
-whenever either component is. Solid border = both stages agree; dashed
-border = one stage only; no border = neither.
+dominates.
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-combined
-#| fig-cap: "Approach × Action, combined Stage 1 + Stage 2 (equal-weight mean percentile). Center = combined score; bottom-left = Stage 1 sim; bottom-right = Stage 2 Jaccard. Bold = that value is above its own 95th percentile. Solid border = both stages agree it's a real link; dashed = one stage only."
 #| fig-height: 10
 tar_read(viz_pair_heatmap_appr_act_combined_fig)
 ```
+
+*Approach × Action, combined Stage 1 + Stage 2 (equal-weight mean
+percentile). **Center number** (large) = the combined score; **bottom-left**
+(small) = Stage 1 definition-text cosine similarity; **bottom-right** (small)
+= Stage 2 cited-literature Jaccard overlap. **Bold** marks a value that is
+itself above its own measure's 95th percentile (a real link); the center
+number is bold whenever either component is. **Solid border** = both stages
+agree; **dashed border** = one stage only; **no border** = neither. The fill
+jumps sharply from light blue to light red across a narrow gap that no cell
+occupies, separating pairs neither stage links (blue) from pairs at least one
+stage links (red). The "Jaccard overlap" is Jaccard's coefficient of
+community (Jaccard 1912, p. 39; species common to both / total species in
+both) — the term "Jaccard index" is a later name, not used in the original
+paper.*

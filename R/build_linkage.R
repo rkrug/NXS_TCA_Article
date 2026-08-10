@@ -608,7 +608,9 @@ build_pair_heatmap_combined_fig <- function(link_stage1, link_stage2, key_works,
   # tile (center/bottom-left/bottom-right); alphabetical order matches
   # build_pair_heatmap_fig()'s default (ggplot's discrete-axis ordering).
   x_levels <- sort(unique(d$label_a))
-  y_levels <- sort(unique(d$label_b))
+  # ggplot's continuous y increases upward, so reverse-sort the target labels
+  # to read top-to-bottom (first label at the top) rather than bottom-to-top.
+  y_levels <- rev(sort(unique(d$label_b)))
   d$xn <- match(d$label_a, x_levels)
   d$yn <- match(d$label_b, y_levels)
 
@@ -710,24 +712,11 @@ build_pair_heatmap_combined_fig <- function(link_stage1, link_stage2, key_works,
       expand = ggplot2::expansion(add = 0.6)
     ) +
     ggplot2::labs(
-      x = paste0(source_keyset, " (source)"),
-      y = paste0(target_keyset, " (target)"),
-      title = stringr::str_wrap(paste0(
-        source_keyset, " × ", target_keyset,
-        " — combined (Stage 1 + Stage 2, equal weight)"
-      ), width = 55),
-      subtitle = stringr::str_wrap(paste0(
-        "Center (large) = mean of each stage's own percentile rank ",
-        "(equal-weight blend). Bottom-left (small) = Stage 1 definition-text ",
-        "cosine similarity; bottom-right (small) = Stage 2 cited-literature ",
-        "Jaccard overlap. Bold = that value is itself above its measure's ",
-        "95th percentile (a real link). Solid border = both stages agree; ",
-        "dashed border = one stage only; no border = neither. Fill jumps ",
-        "sharply from light blue to light red across the gap (",
-        sprintf("%.2f", knots[2]), "-", sprintf("%.2f", knots[3]),
-        ") that separates \"neither stage links this pair\" (blue) from ",
-        "\"at least one does\" (red) -- no cell actually falls in that gap."
-      ), width = 85)
+      x = "TCA Approaches",
+      y = "TCA Actions"
+      # Title and explanatory legend (encoding of centre/corner numbers, bold,
+      # borders, and the blue->red fill jump) live as report text around the
+      # figure rather than baked into the plot here.
     ) +
     ggplot2::theme_minimal(base_size = 9) +
     ggplot2::theme(
