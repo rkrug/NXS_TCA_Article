@@ -126,15 +126,11 @@ output_local/
 input/corpus/
 input/embeddings/
 
-# RunPod pod-pool scripts: local pod configs (may reference secrets/hosts)
-# and generated pod inventories. Templates (pods.conf.example,
-# pods.conf.embedding, pods.conf.bertopic) stay tracked.
-scripts/runpod/pods.conf
-scripts/runpod/pods.conf.NLI
-scripts/runpod/hosts.generated.csv
-scripts/runpod/hosts.generated.yaml
+# RunPod pod-pool scripts + Dockerfiles now live in the external/runpod
+# submodule; local pod configs / generated inventories land inside that
+# submodule's own (gitignored) scripts/runpod/config/, not here.
 
-# Python bytecode cache (from py_compile / local runs of run_bertopic_gpu.py)
+# Python bytecode cache
 __pycache__/
 *.pyc
 NXS TCS Article Chapter Analysis Report - SPECTER2_runpod.html

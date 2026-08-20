@@ -38,7 +38,7 @@ embeddings:
   # name is also used as the `config=` hive-partition value under
   # output/NXS_TCA_corpus/embeddings/, so different models live side-by-side
   # on disk.
-  active: SPECTER2_runpod
+  active: bge_large_runpod
 
   configs:
     SPECTER2:
@@ -78,6 +78,32 @@ embeddings:
       # TEI-server-side flags (read by scripts/start_tei_runpod.sh on the pod):
       max_batch_tokens: 131072
       max_concurrent: 2048
+
+    # RunPod-hosted TEI serving BAAI/bge-large-en-v1.5 (1024-dim, 512-token cap,
+    # cls pooling). Image ghcr.io/rkrug/tei-runpod-bge-large-en-v1.5 is built
+    # from the external/runpod submodule (`make docker-tei-bge-large
+    # VERSION=v0.1.0`) — NOT yet published, so build + push it before first use.
+    # Fill `host` after creating the pod (see
+    # input/pods.conf.tei-bge-large-en-v1.5). Outputs land under
+    # config=bge_large_runpod/, side-by-side with SPECTER2_runpod.
+    bge_large_runpod:
+      host: mb7sc759js91oo-8080.proxy.runpod.net   # <pod-id>-8080.proxy.runpod.net from create_pods.sh
+      port: 443
+      scheme: https
+      # auth_token_keyring: API_TEI   # keyring::key_set("API_TEI") first
+      model: BAAI/bge-large-en-v1.5   # what the pod serves; also the provenance label
+      batch_size: 7168
+      max_batch_size: 128        # matches the image's TEI_MAX_CLIENT_BATCH default
+      concurrency: 14            # parallel in-flight HTTP requests — saturates an L40S/4090
+      # BGE is a single-text model with no [SEP] concatenation semantics, so the
+      # title_abstract variant is a raw concat (empty separator) — the Nomic
+      # convention, not SPECTER2's "[SEP]".
+      sep_token: ""
+      title_cap_combined: 200    # 512-token model, same title-cap rationale as SPECTER2
+      pilot_n: null
+      # TEI-server-side flags (bge image defaults — see the bge Dockerfile):
+      max_batch_tokens: 32768
+      max_concurrent: 512
 
     # Template for adding more models — uncomment, fill in, set embeddings.active above.
     # NomicV1:

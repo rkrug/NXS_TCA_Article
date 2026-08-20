@@ -1,7 +1,0 @@
-# Build context is the repo root. We only need a handful of files. Keep
-# the context tiny so docker doesn't ship 60+ GB of embeddings to the
-# daemon every build.
-**
-!scripts/run_bertopic_gpu.py
-!docker/bertopic-runpod/entrypoint.sh
-!docker/bertopic-runpod/bertopic_idle_watchdog.sh

@@ -1,7 +1,0 @@
-# Build context is the repo root, but we only need scripts/prepare_specter2_merged.py
-# and docker/tei-runpod/entrypoint.sh. Everything else is excluded to keep
-# context transfer small.
-**
-!scripts/prepare_specter2_merged.py
-!docker/tei-runpod/entrypoint.sh
-!docker/tei-runpod/tei_idle_watchdog.sh

@@ -37,12 +37,17 @@
     )
   )
   resp <- httr2::request(llm_cfg$base_url) |>
+    # Log these calls under the app name "NXS_TCA_Article" on OpenRouter.
+    # OpenRouter attributes usage by X-Title (the app-name shown in its
+    # dashboard) + HTTP-Referer; we also pin the User-Agent to the same string
+    # so the app name is consistent across whatever field is inspected.
+    httr2::req_user_agent("NXS_TCA_Article") |>
     httr2::req_headers(
       Authorization = paste("Bearer", api_key),
       "Content-Type" = "application/json",
       # OpenRouter attribution headers (optional but recommended)
       "HTTP-Referer" = "https://github.com/rkrug/NXS_TCA_Article",
-      "X-Title" = "NXS TCA Article"
+      "X-Title" = "NXS_TCA_Article"
     ) |>
     httr2::req_body_json(body) |>
     # Fail fast on a hung socket instead of stalling the whole target.
