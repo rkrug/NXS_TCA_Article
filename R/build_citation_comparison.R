@@ -85,7 +85,7 @@ build_citation_overlap_fig <- function(overlap_data,
     ggplot2::theme(
       axis.text.x = ggplot2::element_text(angle = 25, hjust = 1)
     )
-  save_ggplot_png(p, "citation_method_overlap", figures_dir,
+  save_ggplot_fig(p, "citation_method_overlap", figures_dir,
                   width = 9, height = 5.5)
   p
 }

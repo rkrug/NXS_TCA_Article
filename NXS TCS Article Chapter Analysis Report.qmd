@@ -1,6 +1,6 @@
 ---
 title: "NXS TCS Article — Chapter Analysis"
-subtitle: "How close are the assessment chapters to the keypaper concepts?"
+subtitle: "How do the keypaper concepts link across the TCA/Nexus key-sets?"
 author:
   - name:
       family: Krug
@@ -36,194 +36,15 @@ library(htmltools)
 library(knitr)
 ```
 
-This report measures **how similar the papers in each assessment chapter are to
-the keypaper concepts** (the TCA/Nexus definitions). It is driven by the
-combined per-chapter scores (`scores_combined`): each corpus work scored from
-its `title_abstract` embedding, or its `title` embedding where it has no
-abstract, against the keypaper set — one row per `(work, assessment, chapter)`.
+This report examines **how the keypaper concepts (the TCA/Nexus definitions)
+link to one another across the four key-sets** — especially the directed link
+**TCA Approaches → TCA Action** — and how coherent the keypaper set itself is.
+It builds toward the combined **Approach × Action** heatmap at the end.
 
-A work tagged with several Zotero chapters is counted **once per chapter**
-(honest for "which chapters supply the matches"). Chapter labels are shown as
-tagged, except the malformed NXS tag `Chapter(s) 5`, relabelled to `Chapter 5`;
-the `Chapter 5.0…5.6` sub-chapters are kept separate.
-
-# Overall: which chapters are closest to the keypapers?
-
-Median (with inter-quartile bar) of each work's maximum cosine similarity to
-its nearest keypaper, per assessment/chapter. Higher = the chapter's papers sit
-closer to the keypaper concepts overall.
-
-```{r}
-#| label: fig-chapter-alignment
-#| fig-cap: "Chapter alignment to the keypaper set: median (bar) and bootstrap 95% CI of the median (error bar) of per-work max cosine similarity to the nearest keypaper, per assessment/chapter, sorted ascending. Chapters whose CIs do not overlap are really different; small-n chapters get wide CIs. n = works × chapter memberships in that chapter."
-#| fig-height: 8
-tar_read(viz_chapter_alignment_fig)
-```
-
-## Which chapters are *really* different? (Cliff's δ)
-
-Raw cosine gaps are hard to read on the compressed similarity scale, and with
-thousands of works trivial gaps look "significant". Cliff's δ is an effect
-size: for a pair of chapters it is P(a row-chapter work scores higher) −
-P(it scores lower). **0 ≈ indistinguishable**; |δ| ≈ 0.15 / 0.33 / 0.47 is a
-small / medium / large separation. Read a row against the columns: red = the
-row chapter's papers tend to score *higher* than the column's, blue = lower.
-
-```{r}
-#| label: fig-chapter-cliffs-delta
-#| fig-cap: "Pairwise Cliff's δ between assessment/chapters on per-work max keypaper similarity. Rows/columns ordered by median alignment (highest first). δ near 0 (white) = the two chapters' similarity distributions are indistinguishable."
-#| fig-height: 9
-tar_read(viz_chapter_cliffs_delta_fig)
-```
-
-The chart above collapses each work to its single best-matching keypaper
-(`max_sim`) before comparing chapters. The interactive version below lets you
-pick, from the combobox, either that same collapsed view or any **individual**
-keypaper's raw similarity — i.e. "which chapters differ on their match to
-*this specific concept*" rather than "on their best match to any concept".
-Black borders mark |δ| ≥ 0.147 (a "real", non-negligible difference) in
-either view.
-
-```{r}
-#| label: fig-chapter-cliffs-delta-interactive
-#| fig-cap: "Interactive pairwise Cliff's δ between assessment/chapters. Use the combobox to switch between the collapsed max-keypaper-similarity view and any individual keypaper's raw similarity. Black borders mark |δ| ≥ 0.147 (a real, non-negligible difference)."
-#| fig-height: 10
-tar_read(viz_chapter_cliffs_delta_interactive_fig)
-```
-
-# In detail: chapter × keypaper
-
-Median similarity of each assessment/chapter to each **individual** keypaper.
-Bright cells = the chapter's papers are close to that concept; dark rows =
-concepts the corpus has little near (orphans); a chapter's brightest cells are
-the concepts it most aligns with. Rows (keypapers) and columns (chapters) are
-ordered by overall median. With 161 keypapers this is too long to read as one
-static chart — use the **keyset checkboxes** below to isolate one or two
-keysets at a time; row labels are truncated to 30 characters, full titles are
-on hover.
-
-```{r}
-#| label: fig-chapter-keypaper-heatmap-interactive
-#| fig-cap: "Median cosine similarity per (assessment/chapter, keypaper), filterable by keyset. Rows = keypaper concepts, columns = assessment/chapter."
-#| fig-height: 12
-tar_read(viz_chapter_keypaper_heatmap_interactive_fig)
-```
-
-# Top matches per keypaper, by chapter
-
-Pick a keypaper concept to browse its highest-scoring corpus matches. The
-histogram stacks the matches' similarity by **assessment/chapter**, so you can
-see which chapters supply a concept's closest papers. **Toggle chapters in the
-legend** (click to show/hide, double-click to isolate); `No Chapter` works are
-**hidden by default** — click their legend entry to include them. The table
-below carries `assessment` and `chapter` columns (filterable), and the CSV
-button exports the currently filtered rows. Links go to the DOI when available,
-otherwise the OpenAlex page.
-
-```{r}
-#| label: tbl-top-matches-combined
-tar_read(tbl_top_matches_combined)
-```
-
-# Keypaper relevance across the corpus
-
-The sections above break similarity down by chapter. These look at the
-keypaper-similarity signal across the **whole corpus** (all works, per
-embedding variant) — context for reading the per-chapter results.
-
-For each corpus work, the **max** cosine similarity against any keypaper is the
-single most useful summary — "how close is this work to its nearest reference?"
-A well-calibrated embedding produces a bimodal distribution: relevant works
-pile up on the right, off-topic on the left.
-
-```{r}
-#| label: tbl-score-summary
-tar_read(viz_score_summary_tbl) |>
-  knitr::kable(
-    caption = "Summary statistics of the embeddings, split by source of embedding.",
-    format.args = list(big.mark = ",")
-  )
-```
-
-```{r}
-#| label: fig-score-dist
-#| fig-cap: "Distribution of max cosine similarity to keypapers, per variant. Higher = closer to nearest reference. A clear bimodal shape indicates the embedding separates topic-relevant from off-topic works."
-tar_read(viz_score_dist_fig)
-```
-
-```{r}
-#| label: fig-score-ecdf
-#| fig-cap: "Empirical CDF of max cosine similarity to nearest keypaper, per variant (subsample of 50,000 works per variant, seed = 13). Read horizontally: for any score threshold, the curves give the fraction of works at or below that score."
-tar_read(viz_score_ecdf_fig)
-```
-
-## Relevance threshold sweep
-
-How many corpus works count as "relevant" as the similarity threshold rises —
-useful for picking a cut-off when filtering to keypaper-relevant works.
-
-```{r}
-#| label: fig-threshold
-#| fig-cap: "Number (and fraction) of corpus works with max keypaper similarity at or above each threshold, per variant. A gentle slope means the cut-off choice matters little; a cliff marks a natural relevance boundary."
-tar_read(viz_threshold_fig)
-```
-
-## Score vs publication year
-
-Does similarity to keypapers correlate with how recent a work is? A strong bias
-either way suggests the keypaper set is anchored to a particular era.
-
-```{r}
-#| label: fig-score-year
-#| fig-cap: "2D histogram of max cosine similarity (y) against publication year (x), per variant. Log-scale fill reveals the tail; uniform vertical density at every year is the null-hypothesis appearance — no temporal bias."
-tar_read(viz_score_year_fig)
-```
-
-## Score vs citation count
-
-Are high-similarity works also highly cited? Topical relevance and citation
-impact are different signals — a strong correlation would suggest the embedding
-is picking up "prestige", not topic.
-
-```{r}
-#| label: fig-citation-score
-#| fig-cap: "2D histogram of max cosine similarity (y) against log10(cited_by_count + 1) (x), per variant. A horizontal band = no relationship (good); a diagonal would suggest the embedding co-varies with citation impact rather than topic."
-tar_read(viz_citation_score_fig)
-```
-
-## Score by work type
-
-Does the embedding score some OpenAlex work types (articles, reviews, book
-chapters, …) as more keypaper-relevant than others?
-
-```{r}
-#| label: fig-type-score-heatmap
-#| fig-cap: "Median max-similarity score per (type, variant), for types with ≥ 0.5% of the corpus. Cells annotated with `median (n=…)`. Types sorted by overall median."
-tar_read(viz_type_score_heatmap_fig)
-```
-
-```{r}
-#| label: fig-type-score-box
-#| fig-cap: "Score distribution per type, per variant. Boxes show q05–q25–median–q75–q95 (precomputed). Filtered to types with ≥ 0.5% of the corpus."
-tar_read(viz_type_score_box_fig)
-```
-
-## Top / bottom matches per variant
-
-Sanity check: do the highest-scoring works read as on-topic, and the lowest as
-off-topic? If not, either the embedding isn't capturing the topic or the
-keypaper set is too narrow.
-
-```{r}
-#| label: tbl-top-bottom
-#| results: asis
-tb <- tar_read(viz_top_bottom)
-for (v in names(tb)) {
-  cat("###", v, "\n\n")
-  print(knitr::kable(tb[[v]]))
-  cat("\n\n")
-}
-```
+The heavier corpus-wide analyses (chapter alignment, score distributions,
+work-type and citation breakdowns) and the cited-literature-embedding "Stage 3"
+signal have been removed: they depend on the full-corpus embeddings, which are
+no longer computed in this pruned pipeline.
 
 # Keypaper set
 
@@ -239,33 +60,14 @@ clustering. A coherent set shows clear high-similarity blocks on the diagonal.
 tar_read(viz_keypaper_self_sim_fig)
 ```
 
-## Per-keypaper score distribution
-
-For each of the 62 keypapers, the distribution of cosine similarity across the
-whole corpus. A high median = the keypaper attracts many near matches (possibly
-too generic); a low median = orphaned (the corpus has nothing close). Sorted by
-median, descending.
-
-```{r}
-#| label: fig-keypaper-score-dist
-htmltools::div(
-  style = "height: 3200px; overflow: visible;",
-  tar_read(viz_keypaper_score_dist_fig)
-)
-```
-
-*Per-keypaper score distribution (q05–q25–median–q75–q95). Top = high across the
-corpus (broad/generic concepts); bottom = orphans (topic not well-represented).
-Inputs to keypaper-set curation.*
-
 # Keyset linkage
 
 How do the concept definitions link *to one another* across the four key-sets
 (the worksheet groups: `TCA_Annex_3_3`, `TCA_Approaches_3_2`,
 `TCA_Actions_Ch5`, `Nexus_Response_Options`)? Two directed links are of
 particular interest — **TCA Action → Nexus Response Option** and
-**TCA Approaches → TCA Action** — each shown below as a set of Sankeys (top 3
-targets per source node). Three complementary similarity signals drive them:
+**TCA Approaches → TCA Action** — each shown below as a set of Sankeys. Two
+complementary similarity signals drive them:
 
 - **Stage 1 — definition-text similarity (embeddings):** cosine similarity
   between the keypaper definition embeddings (title_abstract, SPECTER2). Two
@@ -273,10 +75,6 @@ targets per source node). Three complementary similarity signals drive them:
 - **Stage 2 — cited-literature overlap (no embeddings):** two definitions link
   if they *cite the same works* — Jaccard overlap (Jaccard 1912) of the
   resolved cited-work sets (only pairs sharing ≥1 work).
-- **Stage 3 — cited-literature embedding similarity:** two definitions link if
-  the *literature they cite* is semantically close — mean pairwise cosine
-  between the two definitions' cited-work embedding sets (computed as the dot
-  product of their unit-vector centroids).
 
 Jaccard, P. (1912). The distribution of the flora in the alpine zone.
 *New Phytologist*, 11(2), 37–50.
@@ -301,48 +99,13 @@ tar_read(viz_keyset_matrix_stage1_fig)
 tar_read(viz_keyset_matrix_stage2_fig)
 ```
 
-```{r}
-#| label: fig-keyset-matrix-stage3
-#| fig-cap: "Stage 3 — keyset × keyset mean cited-literature embedding similarity."
-tar_read(viz_keyset_matrix_stage3_fig)
-```
-
-## TCA Action ↔ Nexus Response Options
-
-Directed **TCA Action → Nexus Response Option**: for each Action, its top 3
-most-similar Response Options under each signal stage.
-
-### Stage 1 — definition-text similarity (embeddings)
-
-```{r}
-#| label: fig-sankey-act-resp-stage1
-#| fig-height: 12
-tar_read(viz_sankey_act_resp_stage1_ggplot_fig)
-```
-
-### Stage 2 — cited-literature overlap (no embeddings)
-
-```{r}
-#| label: fig-sankey-act-resp-stage2
-#| fig-height: 12
-tar_read(viz_sankey_act_resp_stage2_ggplot_fig)
-```
-
-### Stage 3 — cited-literature embedding similarity
-
-```{r}
-#| label: fig-sankey-act-resp-stage3
-#| fig-height: 12
-tar_read(viz_sankey_act_resp_stage3_ggplot_fig)
-```
-
 ## TCA Approaches ↔ TCA Actions Ch5
 
-Directed **TCA Approaches → TCA Action**: for each Approach, its top 3
+Directed **TCA Approaches → TCA Action**: for each Approach, its top
 most-similar Actions under each signal stage.
 
 The Sankeys above only show each Approach's top matches; the heatmaps below
-show every Approach × Action pair for all three signals. Black borders mark
+show every Approach × Action pair for both signals. Black borders mark
 cells scoring above the 95th percentile of that measure's corpus-wide
 pairwise distribution — i.e. a stronger link than typical, and unlikely to be
 chance; unbordered cells are indistinguishable from background.
@@ -377,28 +140,11 @@ tar_read(viz_sankey_appr_act_stage2_ggplot_fig)
 tar_read(viz_pair_heatmap_appr_act_stage2_fig)
 ```
 
-### Stage 3 — cited-literature embedding similarity
-
-```{r}
-#| label: fig-sankey-appr-act-stage3
-#| fig-height: 12
-tar_read(viz_sankey_appr_act_stage3_ggplot_fig)
-```
-
-```{r}
-#| label: fig-pair-heatmap-appr-act-stage3
-#| fig-cap: "Approach × Action, Stage 3 (cited-literature embedding similarity). Black border = above the 95th percentile of all corpus-wide Stage 3 pairwise values."
-#| fig-height: 10
-tar_read(viz_pair_heatmap_appr_act_stage3_fig)
-```
-
 ### Combined (Stage 1 + Stage 2, equal weight)
 
-Stage 3 carries no distinguishing signal for this pair (no cell above), so
-it's left out here. Each cell blends Stage 1 and Stage 2 as equal-weight
-indicators — each stage's value expressed as a percentile rank against its
-own corpus-wide background, then averaged, so neither measure's raw scale
-dominates.
+Each cell blends Stage 1 and Stage 2 as equal-weight indicators — each stage's
+value expressed as a percentile rank against its own corpus-wide background,
+then averaged, so neither measure's raw scale dominates.
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-combined
@@ -411,11 +157,26 @@ percentile). **Center number** (large) = the combined score; **bottom-left**
 (small) = Stage 1 definition-text cosine similarity; **bottom-right** (small)
 = Stage 2 cited-literature Jaccard overlap. **Bold** marks a value that is
 itself above its own measure's 95th percentile (a real link); the center
-number is bold whenever either component is. **Solid border** = both stages
-agree; **dashed border** = one stage only; **no border** = neither. The fill
-jumps sharply from light blue to light red across a narrow gap that no cell
-occupies, separating pairs neither stage links (blue) from pairs at least one
-stage links (red). The "Jaccard overlap" is Jaccard's coefficient of
+number is bold whenever either component is. Border style (solid = both
+stages agree, dashed = one stage only, no border = neither) is keyed in the
+figure's own "Individual-stage link" legend.
+
+**Fill colour and border answer two different questions, and they need not
+agree.** The fill tracks the **center number** — *how unusual* this pair is —
+on ColorBrewer's colour-blind-safe RdBu palette. Because the combined score
+averages two percentile ranks taken against the background of all keypaper
+pairs, **white sits at 0.5, meaning "as connected as a typical pair of
+concept definitions"**: red is more connected than typical, blue less. Note
+this is a *relative* measure — a Jaccard overlap of 0.03 is tiny in absolute
+terms but lands high because most concept pairs share no citations at all.
+
+The border answers instead whether an **individual stage** clears its own
+95th percentile, i.e. whether the link is strong enough to be treated as
+real, and the **small bottom numbers** are bold on the same test. A cell can
+therefore be distinctly red yet carry no border — sitting, say, at the 93rd
+percentile on both stages: high, but short of the significance bar. The
+colour ranks; the border and bold marks alone certify. The
+"Jaccard overlap" is Jaccard's coefficient of
 community (Jaccard 1912, p. 39; species common to both / total species in
 both) — the term "Jaccard index" is a later name, not used in the original
 paper.*

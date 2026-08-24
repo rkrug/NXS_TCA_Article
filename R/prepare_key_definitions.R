@@ -19,6 +19,8 @@
 #   category            sheet-specific grouping (Table code / Strategy /
 #                       Category), NA where the sheet has none
 #   code                Nexus response-option code, NA elsewhere
+#   short_name          TCA_Actions_Ch5's "Short Name" column (figure axis
+#                       labels), NA elsewhere
 #   primary_approach    TCA_Annex only, NA elsewhere
 #   secondary_approach  TCA_Annex only, NA elsewhere
 #   plus advisory token-size estimates (see estimate_tokens()).
@@ -48,11 +50,14 @@ SPECTER2_TOKEN_LIMIT <- 512L
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   DBI::dbExecute(con, "INSTALL excel; LOAD excel;")
-  DBI::dbGetQuery(con, sprintf(
-    "SELECT * FROM read_xlsx(%s, sheet = %s, all_varchar = true)",
-    DBI::dbQuoteString(con, path),
-    DBI::dbQuoteString(con, sheet)
-  ))
+  DBI::dbGetQuery(
+    con,
+    sprintf(
+      "SELECT * FROM read_xlsx(%s, sheet = %s, all_varchar = true)",
+      DBI::dbQuoteString(con, path),
+      DBI::dbQuoteString(con, sheet)
+    )
+  )
 }
 
 # Per-sheet mapping onto the unified schema. Each returns the standard columns;
@@ -60,54 +65,55 @@ SPECTER2_TOKEN_LIMIT <- 512L
 # across sheets that lack a column).
 .map_sheet <- function(df, keyset) {
   col <- function(name) {
-    if (name %in% names(df)) trimws(df[[name]]) else rep(NA_character_, nrow(df))
+    if (name %in% names(df)) {
+      trimws(df[[name]])
+    } else {
+      rep(NA_character_, nrow(df))
+    }
   }
   base <- switch(
     keyset,
-    "TCA_Annex_3_3" = data.frame(
-      id = col("ID"), source_id = col("ID"),
-      title = col("Theory/framework/methodology"),
-      abstract_raw = col("Literal definition"),
-      category = col("Table code"), code = NA_character_,
-      primary_approach = col("Primary approach"),
-      secondary_approach = col("Secondary approach"),
-      stringsAsFactors = FALSE
-    ),
     "TCA_Approaches_3_2" = data.frame(
-      id = paste0("APPR:", col("ID")), source_id = col("ID"),
+      id = paste0("APPR:", col("ID")),
+      source_id = col("ID"),
       title = col("Approach"),
       abstract_raw = col("Text definition"),
-      category = NA_character_, code = NA_character_,
-      primary_approach = NA_character_, secondary_approach = NA_character_,
+      category = NA_character_,
+      code = NA_character_,
+      short_name = NA_character_,
+      primary_approach = NA_character_,
+      secondary_approach = NA_character_,
       stringsAsFactors = FALSE
     ),
     "TCA_Actions_Ch5" = data.frame(
-      id = col("ID"), source_id = col("ID"),
+      id = col("ID"),
+      source_id = col("ID"),
       title = col("Action"),
       abstract_raw = col("Literal definition"),
-      category = col("Strategy"), code = NA_character_,
-      primary_approach = NA_character_, secondary_approach = NA_character_,
-      stringsAsFactors = FALSE
-    ),
-    "Nexus_Response_Options" = data.frame(
-      id = col("Code"), source_id = col("ID"),
-      title = col("Response option"),
-      abstract_raw = col("Textual definition"),
-      category = col("Category"), code = col("Code"),
-      primary_approach = NA_character_, secondary_approach = NA_character_,
+      category = col("Strategy"),
+      code = NA_character_,
+      short_name = col("Short Name"),
+      primary_approach = NA_character_,
+      secondary_approach = NA_character_,
       stringsAsFactors = FALSE
     ),
     stop("Unknown keyset: ", keyset)
   )
   base$keyset <- keyset
   # drop rows with no usable definition
-  base[!is.na(base$id) & nzchar(base$id) &
-         !is.na(base$abstract_raw) & nzchar(base$abstract_raw), , drop = FALSE]
+  base[
+    !is.na(base$id) &
+      nzchar(base$id) &
+      !is.na(base$abstract_raw) &
+      nzchar(base$abstract_raw),
+    ,
+    drop = FALSE
+  ]
 }
 
 KEYPAPER_SHEETS <- c(
-  "TCA_Annex_3_3", "TCA_Approaches_3_2",
-  "TCA_Actions_Ch5", "Nexus_Response_Options"
+  "TCA_Approaches_3_2",
+  "TCA_Actions_Ch5"
 )
 
 prepare_key_definitions <- function(raw_xlsx) {
@@ -118,15 +124,21 @@ prepare_key_definitions <- function(raw_xlsx) {
 
   if (anyDuplicated(raw$id)) {
     dups <- unique(raw$id[duplicated(raw$id)])
-    stop("Non-unique keypaper id(s) across sheets: ",
-         paste(dups, collapse = ", "))
+    stop(
+      "Non-unique keypaper id(s) across sheets: ",
+      paste(dups, collapse = ", ")
+    )
   }
 
   raw <- raw |>
     dplyr::mutate(
       # Embedded text = definition with inline citations stripped.
-      abstract = vapply(abstract_raw, strip_citations, character(1),
-                        USE.NAMES = FALSE),
+      abstract = vapply(
+        abstract_raw,
+        strip_citations,
+        character(1),
+        USE.NAMES = FALSE
+      ),
       # Combined `title [SEP] abstract` variant — mirrors
       # preprocessor_title_abstract(): title capped at 200 chars + abstract.
       .ta_text = paste0(
@@ -138,15 +150,33 @@ prepare_key_definitions <- function(raw_xlsx) {
       abstract_tokens_est = estimate_tokens(abstract),
       title_abstract_tokens_est = estimate_tokens(.ta_text),
       .ta_words = count_words(.ta_text),
-      shorten_title_abstract_by_words = as.integer(pmax(0L, .ta_words - floor(
-        .ta_words *
-          pmin(1, SPECTER2_TOKEN_LIMIT / pmax(title_abstract_tokens_est, 1L))
-      )))
+      shorten_title_abstract_by_words = as.integer(pmax(
+        0L,
+        .ta_words -
+          floor(
+            .ta_words *
+              pmin(
+                1,
+                SPECTER2_TOKEN_LIMIT / pmax(title_abstract_tokens_est, 1L)
+              )
+          )
+      ))
     ) |>
     dplyr::select(
-      id, source_id, keyset, title, abstract, abstract_raw,
-      category, code, primary_approach, secondary_approach,
-      title_tokens_est, abstract_tokens_est, title_abstract_tokens_est,
+      id,
+      source_id,
+      keyset,
+      title,
+      abstract,
+      abstract_raw,
+      category,
+      code,
+      short_name,
+      primary_approach,
+      secondary_approach,
+      title_tokens_est,
+      abstract_tokens_est,
+      title_abstract_tokens_est,
       shorten_title_abstract_by_words
     )
 
@@ -156,7 +186,8 @@ prepare_key_definitions <- function(raw_xlsx) {
       "title_abstract est. tokens: median %d, max %d | %d over %d (SPECTER2 ",
       "limit) → truncated | shorten by up to %d words"
     ),
-    nrow(raw), dplyr::n_distinct(raw$keyset),
+    nrow(raw),
+    dplyr::n_distinct(raw$keyset),
     as.integer(round(stats::median(raw$title_abstract_tokens_est))),
     max(raw$title_abstract_tokens_est),
     sum(raw$title_abstract_tokens_est > SPECTER2_TOKEN_LIMIT, na.rm = TRUE),
@@ -166,11 +197,16 @@ prepare_key_definitions <- function(raw_xlsx) {
 
   out_dir <- "output/NXS_TCA_corpus/keypaper"
   # Rebuild the hive root cleanly so stale keyset partitions never linger.
-  if (dir.exists(out_dir)) unlink(out_dir, recursive = TRUE)
+  if (dir.exists(out_dir)) {
+    unlink(out_dir, recursive = TRUE)
+  }
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   arrow::write_dataset(
-    raw, path = out_dir, partitioning = "keyset",
-    format = "parquet", basename_template = "part-{i}.parquet"
+    raw,
+    path = out_dir,
+    partitioning = "keyset",
+    format = "parquet",
+    basename_template = "part-{i}.parquet"
   )
   out_dir
 }
