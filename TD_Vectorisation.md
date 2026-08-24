@@ -1,50 +1,53 @@
-# openalexVectorComp — Session Summary
-*Prepared for handoff to Claude Code*
+# TD — Vectorisation (TEI embeddings)
 
----
+Companion to [TD_RunPodSetup.md](TD_RunPodSetup.md), which covers running the
+TEI server itself. This file covers the embedding model and text handling.
+
+> **Scope note.** This began as a handoff summary for **TCAC 2.0**, a ~6M-work
+> OpenAlex corpus embedded end-to-end with SPECTER2. That is no longer what
+> this pipeline does. After the prune, the only embedding target left is
+> `emb_keypapers_title_abstract` — the ~28 TCA/Nexus concept **definitions**
+> in `input/TCA and Nexus Definitions-1.xlsx`. The full-corpus embedding and
+> scoring layers were removed. The corpus statistics that used to sit here
+> described that 6M-work corpus and no longer apply; see git history for them.
 
 ## Context
 
-Working on **TCAC 2.0**, a corpus of ~6M scientific works stored as Arrow/Parquet files. Goal is to generate embeddings for semantic search and bibliometric similarity analysis using **SPECTER2** served via **TEI (Text Embeddings Inference)**.
+Embeddings are produced by `R/embed_works.R`, which POSTs text to a
+[TEI](https://github.com/huggingface/text-embeddings-inference) server and
+writes float parquet under
+`output/NXS_TCA_corpus/embeddings/config=<name>/source=keypaper/variant=<v>/`.
+The model-side helpers live in the R package **`openalexVectorComp`**.
 
-The embeddings are part of the R package **`openalexVectorComp`**, which manages model setup, TEI server lifecycle, and embedding generation.
+The active model name is also the `config=` hive-partition value, so several
+models coexist on disk instead of overwriting one another.
 
----
+## Embedding model
 
-## Embedding Model: SPECTER2
+Configured under `embeddings.configs.<name>` in `input/config.yaml`; the
+active one is `embeddings.active`.
 
-- **Model**: `allenai/specter2_base` + `proximity` adapter
-- **Dimensions**: 768 (float16 recommended for storage)
-- **Max tokens**: 512
-- **Input format**: `title [SEP] abstract` (SPECTER2 tokenizer sep token)
-- **Adapter choice**:
-  - `proximity` — for batch embedding of corpus (document-to-document similarity)
-  - `adhoc_query` — for embedding user queries at search time
-- **Key property**: Citations used only during training, not at inference. At inference time, only title + abstract are needed.
+| | **`bge_large_runpod`** (active) | `SPECTER2_runpod` |
+|---|---|---|
+| Model | `BAAI/bge-large-en-v1.5` | `allenai/specter2_base` + `proximity` adapter |
+| Dimensions | 1024 | 768 |
+| Max tokens | 512 | 512 |
+| Title/abstract join | raw concat, `sep_token: ""` | `title [SEP] abstract` |
+| Pooling | cls | cls |
 
-### Why not GTE-Large (OpenAlex's model)?
-- GTE-Large is what OpenAlex uses (via Databricks `databricks-gte-large-en`)
-- 1024 dimensions, ~340M params — ~3× larger and slower than SPECTER2
-- SPECTER2 is domain-appropriate (trained on scientific citation graph)
-- SPECTER2 is already integrated into `openalexVectorComp`
+The separator matters: SPECTER2 was trained with an explicit `[SEP]` between
+title and abstract, whereas BGE is a single-text model with no such
+convention, so its `sep_token` is empty and the two fields are concatenated
+directly. `title_cap_combined: 200` caps the title in the combined variant for
+both.
 
----
-
-## Corpus Statistics (TCAC 2.0)
-
-- **Total records**: ~6M
-- **No abstract** (NA or 0 tokens): ~20%
-- **Abstract token distribution** (estimated at 4.5 chars/token):
-  - 80th percentile: ~515 tokens
-  - 90th percentile: ~724 tokens
-  - 95th percentile: ~975 tokens
-  - 99th percentile: ~2,222 tokens
-- **Truncation impact**: ~20% of abstracts exceed 512 tokens — TEI handles truncation automatically, cutting from the end of the abstract (ideal, since key content is front-loaded)
-- **Title length**: peaks at 80–100 chars, essentially all under 200 chars — no truncation concern
+SPECTER2 remains domain-appropriate (trained on the scientific citation
+graph); BGE is the current default. Switching is a one-line `active:` change
+plus a host — outputs land in separate `config=` partitions.
 
 ---
 
-## Embedding Sets — Three Planned
+## Embedding Sets — Three Planned — Three Planned
 
 | Set | Input | Coverage | Notes |
 |---|---|---|---|
