@@ -43,12 +43,32 @@ build_link_stage1_data <- function(emb_keypapers_title_abstract, key_works) {
   emb <- arrow::open_dataset(emb_keypapers_title_abstract) |>
     dplyr::select(id, dplyr::starts_with("V")) |>
     dplyr::collect()
+
+  # Restrict to the CURRENT definition set before computing anything.
+  # embed_works() leaves behind embeddings for definitions since removed from
+  # the source xlsx, and while those orphan ids are dropped from the plotted
+  # cells (their keyset is NA), they would otherwise still enter the
+  # percentile BACKGROUND in build_pair_heatmap_data(), which uses every edge
+  # in this table. That background defines what "a typical pair of concept
+  # definitions" means, so it has to be the current key set and nothing else.
+  meta <- .keypaper_meta(key_works)
+  n_before <- nrow(emb)
+  emb <- emb[emb$id %in% meta$id, , drop = FALSE]
+  if (nrow(emb) < n_before) {
+    message(sprintf(
+      paste0(
+        "[link_stage1] dropped %d of %d embedded definitions not in the ",
+        "current key set (stale embeddings from a previous set)."
+      ),
+      n_before - nrow(emb), n_before
+    ))
+  }
+
   M <- .unit_rows(emb)
   sims <- M %*% t(M)
   rownames(sims) <- emb$id
   colnames(sims) <- emb$id
 
-  meta <- .keypaper_meta(key_works)
   ks <- stats::setNames(meta$keyset, meta$id)
 
   long <- tibble::as_tibble(as.data.frame.table(
