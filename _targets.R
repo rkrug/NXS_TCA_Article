@@ -263,7 +263,7 @@ list(
   ),
   tar_target(
     viz_keypaper_self_sim_data,
-    build_viz_keypaper_self_sim_data(emb_keypapers_title_abstract),
+    build_viz_keypaper_self_sim_data(emb_keypapers_title_abstract, key_works),
     format = qs2_format()
   ),
   tar_target(

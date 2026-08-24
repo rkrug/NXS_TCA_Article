@@ -68,10 +68,34 @@ save_widget_html <- function(w, name, dir = "output/figures") {
 
 # ---- keypaper coherence (self-similarity heatmap) --------------------------
 
-build_viz_keypaper_self_sim_data <- function(emb_keypapers_title_abstract) {
+build_viz_keypaper_self_sim_data <- function(
+  emb_keypapers_title_abstract,
+  key_works
+) {
   emb <- arrow::open_dataset(emb_keypapers_title_abstract) |>
     dplyr::select(id, dplyr::starts_with("V")) |>
     dplyr::collect()
+
+  # Restrict to the CURRENT definition set. embed_works() never removes rows
+  # for definitions that have since been dropped from the source xlsx (its
+  # skip-guard only compares the leaf's row count against its own completion
+  # marker), so the embedding store accumulates orphans -- without this the
+  # heatmap plots definitions that are no longer part of the key set.
+  current_ids <- arrow::open_dataset(key_works) |>
+    dplyr::select(id) |>
+    dplyr::collect()
+  n_before <- nrow(emb)
+  emb <- emb[emb$id %in% current_ids$id, , drop = FALSE]
+  if (nrow(emb) < n_before) {
+    message(sprintf(
+      paste0(
+        "[keypaper_self_sim] %d of %d embedded rows are not in the current ",
+        "key set -- dropped (stale embeddings from a previous definition set)."
+      ),
+      n_before - nrow(emb), n_before
+    ))
+  }
+
   vcols <- grep("^V[0-9]+$", names(emb), value = TRUE)
   vcols <- vcols[order(as.integer(sub("^V", "", vcols)))]
   M <- as.matrix(emb[, vcols, drop = FALSE])
@@ -79,6 +103,11 @@ build_viz_keypaper_self_sim_data <- function(emb_keypapers_title_abstract) {
   norms[norms == 0] <- 1
   M <- M / norms
   sims <- M %*% t(M)
+  # Cosine similarity is bounded by [-1, 1], but the matrix product overshoots
+  # slightly on the diagonal (1.0000000000000022). Those values fall outside
+  # the fill scale's limits and render as grey NA cells, so clamp away the
+  # floating-point excess.
+  sims <- pmin(pmax(sims, -1), 1)
   # Hierarchical clustering order so block structure pops on the heatmap
   ord <- stats::hclust(stats::as.dist(1 - sims), method = "average")$order
   ids_ordered <- emb$id[ord]
