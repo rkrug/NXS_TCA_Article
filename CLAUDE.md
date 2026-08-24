@@ -101,22 +101,17 @@ is `_targets.R`. Configuration lives in `input/config.yaml`.
    under `R/build_visualisations.R`. Score distributions, UMAP scatter,
    topic overlays, per-keypaper diagnostics. Most consumers read narrow
    slices via arrow pushdown rather than materialising the full corpus.
-8. **Reports** — Quarto reports rendered as `tar_quarto` targets:
-    - `report_embeddings` → `NXS TCS Article Embedding Report.qmd`
-      (corpus stats, embedding quality, keypaper coherence).
-    - `report_topic_modelling` → `NXS TCS Article Topic Modelling Report.qmd`
-      (BERTopic diagnostics, keypaper coverage per topic).
-      `report_topic_modelling_named` then copies the rendered html to
-      `NXS TCS Article Topic Modelling Report - <active_for_viz>.html`, so
-      each `bertopic.active_for_viz` config keeps its own archived report
-      instead of being overwritten when the config changes.
+8. **Reports** — two Quarto reports, rendered as `tar_quarto` targets and
+   copied into `output/reports/`:
+    - `report_analysis` → `NXS TCS Article Chapter Analysis Report.qmd`
+      (keypaper coherence + the keyset-linkage material, ending in the
+      combined Approach × Action heatmap — the manuscript figure).
+    - `report_citation_comparison` →
+      `NXS TCS Article Citation Method Comparison Report.qmd`
+      (regex vs LLM citation extraction).
 
-    `NXS TCS Article Corpus Report.qmd` is no longer auto-rendered by the
-    pipeline (its `report_corpus` target was removed) and is now stale —
-    it references the removed search-term targets (`count_st`,
-    `yearly_counts`, `assess_tfc`, `assess_nature`) and would need manual
-    rework before it could be rendered again with
-    `quarto::quarto_render("NXS TCS Article Corpus Report.qmd")`.
+    The Embedding, Topic Modelling, Corpus and index reports were removed
+    along with the targets that fed them.
 
 ### Key external packages
 
@@ -204,14 +199,14 @@ make renv-snapshot
 Single target interactively:
 
 ```r
-targets::tar_make(names = "corpus")
-targets::tar_load(corpus)
+targets::tar_make(names = "viz_pair_heatmap_appr_act_combined_fig")
+targets::tar_load(link_stage1)
 ```
 
 Render a report directly (bypass tar_quarto):
 
 ```r
-quarto::quarto_render("NXS TCS Article Corpus Report.qmd")
+quarto::quarto_render("NXS TCS Article Chapter Analysis Report.qmd")
 ```
 
 ## Notes
@@ -231,12 +226,10 @@ quarto::quarto_render("NXS TCS Article Corpus Report.qmd")
 
 ## Standing TODOs
 
-See `NEXT_STEPS.md` for current state, and these per-topic design notes:
-
-- `TODO_Visualisations.md` — principles + backlog for the figure layer.
-- `TODO_NamedKeypaperSets.md` — design for multiple coexisting
-  keypaper sets.
-- `TODO_BERTopicStageCaching.md` — stage-cache architecture (built).
-- `TODO_DetachedDispatch.md` — survive Ctrl-C / sleep during pod runs.
-- `TODO_FullCloudMigration.md` — deferred (Phase 2 cloud).
-- `TODO_ShinyMigration.md` — deferred (interactive UI).
+The per-topic design notes (`TODO_Visualisations.md`,
+`TODO_NamedKeypaperSets.md`, `TODO_BERTopicStageCaching.md`,
+`TODO_DetachedDispatch.md`, `TODO_FullCloudMigration.md`,
+`TODO_ShinyMigration.md`) were removed with the pipeline prune — they
+described BERTopic, the full-corpus viz layer and deferred cloud/Shiny work,
+none of which the pipeline still contains. See git history if any of it is
+needed again. `NEXT_STEPS.md` predates the prune and is stale.
