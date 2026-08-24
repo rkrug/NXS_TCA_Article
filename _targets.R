@@ -326,7 +326,8 @@ list(
     build_keyset_matrix_fig(
       link_stage1,
       value_col = "sim",
-      name = "keyset_matrix_stage1"
+      name = "keyset_matrix_stage1",
+      key_works = key_works
     ),
     format = qs2_format()
   ),
@@ -335,7 +336,8 @@ list(
     build_keyset_matrix_fig(
       link_stage2,
       value_col = "jaccard",
-      name = "keyset_matrix_stage2"
+      name = "keyset_matrix_stage2",
+      key_works = key_works
     ),
     format = qs2_format()
   ),

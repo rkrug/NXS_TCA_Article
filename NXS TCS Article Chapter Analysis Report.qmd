@@ -37,9 +37,10 @@ library(knitr)
 ```
 
 This report examines **how the keypaper concepts (the TCA/Nexus definitions)
-link to one another across the four key-sets** — especially the directed link
-**TCA Approaches → TCA Action** — and how coherent the keypaper set itself is.
-It builds toward the combined **Approach × Action** heatmap at the end.
+link to one another across the two key-sets** — especially the association
+between **TCA Approaches and TCA Actions** — and how coherent the keypaper set
+itself is. It builds toward the combined **Approach × Action** heatmap at the
+end.
 
 The heavier corpus-wide analyses (chapter alignment, score distributions,
 work-type and citation breakdowns) and the cited-literature-embedding "Stage 3"
@@ -62,19 +63,23 @@ tar_read(viz_keypaper_self_sim_fig)
 
 # Keyset linkage
 
-How do the concept definitions link *to one another* across the four key-sets
-(the worksheet groups: `TCA_Annex_3_3`, `TCA_Approaches_3_2`,
-`TCA_Actions_Ch5`, `Nexus_Response_Options`)? Two directed links are of
-particular interest — **TCA Action → Nexus Response Option** and
-**TCA Approaches → TCA Action** — each shown below as a set of Sankeys. Two
-complementary similarity signals drive them:
+How do the concept definitions link *to one another* across the two key-sets
+(the worksheet groups `TCA_Approaches_3_2` and `TCA_Actions_Ch5`)? The
+association of interest is **TCA Approaches with TCA Actions**, shown below as
+Sankeys and heatmaps. Two complementary similarity signals drive it:
 
 - **Stage 1 — definition-text similarity (embeddings):** cosine similarity
-  between the keypaper definition embeddings (title_abstract, SPECTER2). Two
-  definitions link if their *wording/concepts* are close.
+  between the keypaper definition embeddings (title_abstract,
+  `BAAI/bge-large-en-v1.5`, 1024-dim; title and abstract are concatenated
+  directly, as BGE has no `[SEP]` convention). Two definitions link if their
+  *wording/concepts* are close.
 - **Stage 2 — cited-literature overlap (no embeddings):** two definitions link
   if they *cite the same works* — Jaccard overlap (Jaccard 1912) of the
-  resolved cited-work sets (only pairs sharing ≥1 work).
+  resolved cited-work sets.
+
+Both measures are **symmetric**: the association between an Approach and an
+Action carries no direction, so the Sankeys' left-to-right arrangement is a
+layout convention, not a claim about influence.
 
 Jaccard, P. (1912). The distribution of the flora in the alpine zone.
 *New Phytologist*, 11(2), 37–50.
@@ -83,9 +88,10 @@ community", defined on p. 39: species common to both / total species in both).
 
 ## Keyset × keyset overview
 
-Each Sankey below isolates one source → target keyset pair. These matrices give
-the whole picture: the mean similarity between *every* pair of key-sets, per
-signal stage (read a row against the columns).
+These matrices give the whole picture: the mean similarity between *every*
+pair of key-sets, per signal stage (read a row against the columns). Means are
+taken over all ordered definition pairs in each keyset combination, zeros
+included.
 
 ```{r}
 #| label: fig-keyset-matrix-stage1
@@ -95,20 +101,22 @@ tar_read(viz_keyset_matrix_stage1_fig)
 
 ```{r}
 #| label: fig-keyset-matrix-stage2
-#| fig-cap: "Stage 2 — keyset × keyset mean Jaccard overlap of cited-work sets."
+#| fig-cap: "Stage 2 — keyset × keyset mean Jaccard overlap of cited-work sets, averaged over every ordered pair of definitions including the many that share no citations at all (so the values are small)."
 tar_read(viz_keyset_matrix_stage2_fig)
 ```
 
 ## TCA Approaches ↔ TCA Actions Ch5
 
-Directed **TCA Approaches → TCA Action**: for each Approach, its top
-most-similar Actions under each signal stage.
+**TCA Approaches with TCA Actions**: for each Approach, its most-similar
+Actions under each signal stage.
 
 The Sankeys above only show each Approach's top matches; the heatmaps below
-show every Approach × Action pair for both signals. Black borders mark
-cells scoring above the 95th percentile of that measure's corpus-wide
-pairwise distribution — i.e. a stronger link than typical, and unlikely to be
-chance; unbordered cells are indistinguishable from background.
+show every Approach × Action pair for both signals. Black borders mark cells
+in the **top 5% of all concept-definition pairs** for that measure. This is a
+rank threshold, not a statistical test: about 5% of any set of pairs clears it
+by construction, there is no null model of "no association", and no correction
+is applied for the 264 simultaneous comparisons. Treat a border as "unusually
+high for this measure", not as evidence against chance.
 
 ### Stage 1 — definition-text similarity (embeddings)
 
@@ -120,7 +128,7 @@ tar_read(viz_sankey_appr_act_stage1_ggplot_fig)
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-stage1
-#| fig-cap: "Approach × Action, Stage 1 (definition-text cosine similarity). Black border = above the 95th percentile of all corpus-wide Stage 1 pairwise values."
+#| fig-cap: "Approach × Action, Stage 1 (definition-text cosine similarity). Black border = in the top 5% of all ordered pairs of concept definitions on this measure."
 #| fig-height: 10
 tar_read(viz_pair_heatmap_appr_act_stage1_fig)
 ```
@@ -135,7 +143,7 @@ tar_read(viz_sankey_appr_act_stage2_ggplot_fig)
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-stage2
-#| fig-cap: "Approach × Action, Stage 2 (cited-literature Jaccard overlap). Black border = above the 95th percentile of all corpus-wide Stage 2 pairwise values (background includes the many zero-overlap pairs)."
+#| fig-cap: "Approach × Action, Stage 2 (cited-literature Jaccard overlap). Black border = in the top 5% of all ordered pairs of concept definitions on this measure (the reference distribution includes the many zero-overlap pairs)."
 #| fig-height: 10
 tar_read(viz_pair_heatmap_appr_act_stage2_fig)
 ```
@@ -143,8 +151,9 @@ tar_read(viz_pair_heatmap_appr_act_stage2_fig)
 ### Combined (Stage 1 + Stage 2, equal weight)
 
 Each cell blends Stage 1 and Stage 2 as equal-weight indicators — each stage's
-value expressed as a percentile rank against its own corpus-wide background,
-then averaged, so neither measure's raw scale dominates.
+value expressed as a percentile rank against the distribution of that measure
+over all ordered pairs of concept definitions, then averaged, so neither
+measure's raw scale dominates.
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-combined
@@ -155,28 +164,39 @@ tar_read(viz_pair_heatmap_appr_act_combined_fig)
 *Approach × Action, combined Stage 1 + Stage 2 (equal-weight mean
 percentile). **Center number** (large) = the combined score; **bottom-left**
 (small) = Stage 1 definition-text cosine similarity; **bottom-right** (small)
-= Stage 2 cited-literature Jaccard overlap. **Bold** marks a value that is
-itself above its own measure's 95th percentile (a real link); the center
-number is bold whenever either component is. Border style (solid = both
-stages agree, dashed = one stage only, no border = neither) is keyed in the
-figure's own "Individual-stage link" legend.
+= Stage 2 cited-literature Jaccard overlap. **Bold** marks a value in the top
+5% of all concept-definition pairs for its own measure; the center number is
+bold whenever either component is. Border style (solid = both stages, dashed =
+one stage only) is keyed in the figure's own "Individual-stage link" legend.
+Emphasis follows the unrounded value, so two cells printing the same rounded
+number can differ.
 
 **Fill colour and border answer two different questions, and they need not
 agree.** The fill tracks the **center number** — *how unusual* this pair is —
-on ColorBrewer's colour-blind-safe RdBu palette. Because the combined score
-averages two percentile ranks taken against the background of all keypaper
-pairs, **white sits at 0.5, meaning "as connected as a typical pair of
-concept definitions"**: red is more connected than typical, blue less. Note
-this is a *relative* measure — a Jaccard overlap of 0.03 is tiny in absolute
-terms but lands high because most concept pairs share no citations at all.
+on ColorBrewer's colour-blind-safe RdBu palette, running from 0 to 1. Each
+stage's value is ranked against **all pairs of concept definitions, including
+Action–Action and Approach–Approach pairs**, and the two ranks are averaged.
+Because within-keyset pairs are systematically more similar than
+Approach × Action pairs, and because most pairs share no citations at all, the
+**typical Approach × Action cell scores about 0.43–0.45 rather than 0.5** —
+so the map reads predominantly blue. Read the colour as a relative ranking
+across the whole figure, not as an absolute statement that a given pair is
+"below typical".
 
-The border answers instead whether an **individual stage** clears its own
-95th percentile, i.e. whether the link is strong enough to be treated as
-real, and the **small bottom numbers** are bold on the same test. A cell can
-therefore be distinctly red yet carry no border — sitting, say, at the 93rd
-percentile on both stages: high, but short of the significance bar. The
-colour ranks; the border and bold marks alone certify. The
-"Jaccard overlap" is Jaccard's coefficient of
-community (Jaccard 1912, p. 39; species common to both / total species in
-both) — the term "Jaccard index" is a later name, not used in the original
-paper.*
+The border answers instead whether an **individual stage** falls in the top 5%
+for its own measure, and the **small bottom numbers** are bold on the same
+test. A cell can therefore be distinctly red yet carry no border (42 cells
+here), or carry a border while sitting near white: the colour ranks the
+blended score, the border and bold marks flag the individual stages.
+
+Three limitations to keep in mind when reading Stage 2. First, it is close to
+**binary rather than graded**: pairs sharing no citations all sit at the same
+rank (0.39), and the smallest non-zero overlap already jumps to 0.77. Second,
+Jaccard is **normalised by reference-list size**, so it measures proportional
+rather than absolute overlap — a pair sharing one reference out of few can
+outrank a pair sharing two out of many, and indeed does so here. Third, and
+consequently, definitions with **longer reference lists tend to look better
+connected** (r = 0.51 between citation count and mean combined score across
+Actions). The "Jaccard overlap" is Jaccard's coefficient of community
+(Jaccard 1912, p. 39; species common to both / total species in both) — the
+term "Jaccard index" is a later name, not used in the original paper.*

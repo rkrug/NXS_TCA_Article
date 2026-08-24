@@ -593,10 +593,27 @@ build_keyset_matrix_fig <- function(
   edge_data,
   value_col,
   name,
+  key_works,
   figures_dir = "output/figures"
 ) {
-  d <- edge_data
+  # Average over the FULL pair grid, not just the pairs present in edge_data.
+  # Stage 2 only emits an edge when two definitions share a cited work, so
+  # averaging edge_data alone silently conditioned on "shares >= 1 work" and
+  # reported a mean ~6x the real one, while the caption promised the plain
+  # mean Jaccard. Rebuild every ordered pair of definitions and zero-fill the
+  # absent ones. (No-op for stage 1, whose edge list is already dense.)
+  meta <- .keypaper_meta(key_works)
+  ks <- stats::setNames(meta$keyset, meta$id)
+  grid <- expand.grid(
+    id_a = meta$id, id_b = meta$id, stringsAsFactors = FALSE
+  )
+  grid <- grid[grid$id_a != grid$id_b, , drop = FALSE]
+  obs <- edge_data[, c("id_a", "id_b", value_col)]
+  d <- dplyr::left_join(grid, obs, by = c("id_a", "id_b"))
   d$value <- as.numeric(d[[value_col]])
+  d$value[is.na(d$value)] <- 0
+  d$keyset_a <- unname(ks[d$id_a])
+  d$keyset_b <- unname(ks[d$id_b])
   agg <- d |>
     dplyr::group_by(keyset_a, keyset_b) |>
     dplyr::summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop")
@@ -656,12 +673,16 @@ build_pair_heatmap_data <- function(
     meta$id
   )
 
-  # Keypapers with zero data for this stage anywhere (e.g. no resolved
-  # citations at all for stage 2/3) never appear in edge_data and are
-  # dropped, same convention build_sankey_fig_ggplot() relies on.
-  present_ids <- unique(c(edge_data$id_a, edge_data$id_b))
-  src_ids <- meta$id[meta$keyset == source_keyset & meta$id %in% present_ids]
-  tgt_ids <- meta$id[meta$keyset == target_keyset & meta$id %in% present_ids]
+  # The axes are the KEY SET, not whatever happens to appear in edge_data.
+  # build_link_stage2_data() emits an edge only for pairs that share >=1 cited
+  # work, so a definition citing nothing in common with anything else is absent
+  # from its edge list entirely. Deriving the axes from the data therefore
+  # DELETED such a definition from the figure without trace (this silently
+  # dropped the whole "Science and technology approaches" column). Absence of
+  # an edge means a value of zero -- a result -- so build the full grid and let
+  # the zero-fill below record it.
+  src_ids <- meta$id[meta$keyset == source_keyset]
+  tgt_ids <- meta$id[meta$keyset == target_keyset]
 
   grid <- expand.grid(id_a = src_ids, id_b = tgt_ids, stringsAsFactors = FALSE)
   observed <- edge_data[
@@ -673,8 +694,13 @@ build_pair_heatmap_data <- function(
 
   # Zero-inflation-corrected background: append the pairs stage 2 dropped
   # (value 0) to the observed edge values. No-op for the already-dense
-  # stage 1 / stage 3 edge lists (n_missing == 0).
-  n_nodes <- length(present_ids)
+  # stage 1 edge list (n_missing == 0).
+  #
+  # The universe is the DEFINITION SET, not the nodes present in edge_data.
+  # Sizing it from the latter omitted every pair involving a definition with no
+  # overlaps at all -- 54 of 756 ordered pairs for stage 2 -- which shifted the
+  # printed value of a third of the cells.
+  n_nodes <- nrow(meta)
   bg_raw <- as.numeric(edge_data[[value_col]])
   n_missing <- max(n_nodes * (n_nodes - 1) - length(bg_raw), 0)
   bg <- c(bg_raw, rep(0, n_missing))
@@ -794,7 +820,11 @@ build_pair_heatmap_combined_data <- function(
     source_keyset,
     target_keyset
   )
-  d <- dplyr::inner_join(
+  # full_join, not inner_join: an inner join silently deleted any cell missing
+  # from either stage. Both stages now produce the same full key-set grid, so
+  # this is belt-and-braces -- but it fails loudly (NA) rather than silently
+  # shrinking the figure if that ever stops being true.
+  d <- dplyr::full_join(
     d1[, c(
       "id_a",
       "id_b",
@@ -972,14 +1002,14 @@ build_pair_heatmap_combined_fig <- function(
       size = 4.15
     ) +
     ggplot2::geom_text(
-      ggplot2::aes(x = xn - 0.28, y = yn - 0.28, label = sprintf("%.2f", sim)),
+      ggplot2::aes(x = xn - 0.25, y = yn - 0.28, label = sprintf("%.2f", sim)),
       color = color_sim,
       fontface = fontface_sim,
       size = 2.82
     ) +
     ggplot2::geom_text(
       ggplot2::aes(
-        x = xn + 0.28,
+        x = xn + 0.25,
         y = yn - 0.28,
         label = sprintf("%.2f", jaccard)
       ),
@@ -1149,7 +1179,7 @@ build_pair_heatmap_combined_fig <- function(
   # save_ggplot_fig() also writes is the submission-ready vector version.
   save_ggplot_fig(
     p, name, figures_dir,
-    width = 140, height = 222, units = "mm", dpi = 300, eps = TRUE
+    width = 160, height = 222, units = "mm", dpi = 300, eps = TRUE
   )
   p
 }
