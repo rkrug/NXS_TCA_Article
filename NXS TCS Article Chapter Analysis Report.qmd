@@ -1,6 +1,6 @@
 ---
 title: "NXS TCS Article — Chapter Analysis"
-subtitle: "How do the keypaper concepts link across the TCA/Nexus key-sets?"
+subtitle: "How do the concept definitions link across the TCA/Nexus key-sets?"
 author:
   - name:
       family: Krug
@@ -36,9 +36,9 @@ library(htmltools)
 library(knitr)
 ```
 
-This report examines **how the keypaper concepts (the TCA/Nexus definitions)
-link to one another across the two key-sets** — especially the association
-between **TCA Approaches and TCA Actions** — and how coherent the keypaper set
+This report examines **how the TCA/Nexus concept definitions link to one
+another across the two key-sets** — especially the association between
+**TCA Approaches and TCA Actions** — and how coherent the definition set
 itself is. It builds toward the **Approach × Action** heatmap at the end.
 
 The heavier corpus-wide analyses (chapter alignment, score distributions,
@@ -46,17 +46,18 @@ work-type and citation breakdowns) and the cited-literature-embedding "Stage 3"
 signal have been removed: they depend on the full-corpus embeddings, which are
 no longer computed in this pruned pipeline.
 
-# Keypaper set
+# Definition set
 
-## Keypaper coherence
+## Definition coherence
 
-How tight is the keypaper set itself? Pairwise cosine similarity between the
-keypapers (title_abstract variant), reordered by average-linkage hierarchical
-clustering. A coherent set shows clear high-similarity blocks on the diagonal.
+How tight is the definition set itself? Pairwise cosine similarity between
+the definitions (title_abstract variant), reordered by average-linkage
+hierarchical clustering. A coherent set shows clear high-similarity blocks on
+the diagonal.
 
 ```{r}
 #| label: fig-keypaper-self-sim
-#| fig-cap: "Pairwise cosine similarity between keypapers (title_abstract variant). Axis order is from hierarchical clustering (1 − cosine, average linkage). Block structure on the diagonal indicates topical sub-groups within the keypaper set."
+#| fig-cap: "Pairwise cosine similarity between definitions (title_abstract variant). Axis order is from hierarchical clustering (1 − cosine, average linkage). Block structure on the diagonal indicates topical sub-groups within the definition set."
 tar_read(viz_keypaper_self_sim_fig)
 ```
 
@@ -68,7 +69,7 @@ association of interest is **TCA Approaches with TCA Actions**, shown below as
 Sankeys and heatmaps. Two complementary similarity signals drive it:
 
 - **Stage 1 — definition-text similarity (embeddings):** cosine similarity
-  between the keypaper definition embeddings (title_abstract,
+  between the concept definition embeddings (title_abstract,
   `BAAI/bge-large-en-v1.5`, 1024-dim; title and abstract are concatenated
   directly, as BGE has no `[SEP]` convention). Two definitions link if their
   *wording/concepts* are close.
