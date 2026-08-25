@@ -27,6 +27,7 @@ execute:
 library(targets)
 library(dplyr)
 library(knitr)
+source("R/build_visualisations.R")
 ```
 
 The cited literature is discovered by **extracting in-text citations from the
@@ -76,6 +77,11 @@ likely spurious (mis-parses or hallucinations that match nothing).
 #| label: fig-overlap
 #| fig-cap: "Distinct (author, year) citations per keyset, split by whether they were found by both methods, regex only, or LLM only. A large 'both' block = the methods largely agree; large method-only blocks locate systematic differences (e.g. narrative citations, institutional authors)."
 tar_read(viz_citation_overlap_fig)
+```
+
+```{r}
+#| results: asis
+cat(fig_download_links_md("citation_method_overlap"))
 ```
 
 ```{r}

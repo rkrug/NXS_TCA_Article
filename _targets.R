@@ -439,6 +439,19 @@ list(
       if (!file.copy(src, dest, overwrite = TRUE)) {
         stop("Could not copy ", src, " to ", dest)
       }
+      # output/figures/ isn't tracked in git, so the report's own download
+      # links (see fig_download_links_md() calls in the .qmd) need a
+      # tracked copy alongside it.
+      copy_report_figures(c(
+        "keypaper_self_sim",
+        "sankey_appr_act_stage1_definition_embedding_ggplot",
+        "sankey_appr_act_stage2_citation_overlap_ggplot",
+        "keyset_matrix_stage1",
+        "keyset_matrix_stage2",
+        "pair_heatmap_appr_act_stage1",
+        "pair_heatmap_appr_act_stage2",
+        "pair_heatmap_appr_act_combined"
+      ))
       dest
     },
     format = "file"
@@ -463,6 +476,7 @@ list(
       if (!file.copy(src, dest, overwrite = TRUE)) {
         stop("Could not copy ", src, " to ", dest)
       }
+      copy_report_figures("citation_method_overlap")
       dest
     },
     format = "file"

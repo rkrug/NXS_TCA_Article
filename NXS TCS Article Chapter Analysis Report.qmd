@@ -34,6 +34,7 @@ execute:
 library(targets)
 library(htmltools)
 library(knitr)
+source("R/build_visualisations.R")
 ```
 
 This report examines **how the TCA/Nexus concept definitions link to one
@@ -59,6 +60,11 @@ the diagonal.
 #| label: fig-keypaper-self-sim
 #| fig-cap: "Pairwise cosine similarity between definitions (title_abstract variant). Axis order is from hierarchical clustering (1 − cosine, average linkage). Block structure on the diagonal indicates topical sub-groups within the definition set."
 tar_read(viz_keypaper_self_sim_fig)
+```
+
+```{r}
+#| results: asis
+cat(fig_download_links_md("keypaper_self_sim"))
 ```
 
 # Keyset linkage
@@ -100,9 +106,19 @@ tar_read(viz_keyset_matrix_stage1_fig)
 ```
 
 ```{r}
+#| results: asis
+cat(fig_download_links_md("keyset_matrix_stage1"))
+```
+
+```{r}
 #| label: fig-keyset-matrix-stage2
 #| fig-cap: "Stage 2 — keyset × keyset mean Jaccard overlap of cited-work sets, averaged over every ordered pair of definitions including the many that share no citations at all (so the values are small)."
 tar_read(viz_keyset_matrix_stage2_fig)
+```
+
+```{r}
+#| results: asis
+cat(fig_download_links_md("keyset_matrix_stage2"))
 ```
 
 ## TCA Approaches ↔ TCA Actions Ch5
@@ -127,10 +143,20 @@ tar_read(viz_sankey_appr_act_stage1_ggplot_fig)
 ```
 
 ```{r}
+#| results: asis
+cat(fig_download_links_md("sankey_appr_act_stage1_definition_embedding_ggplot"))
+```
+
+```{r}
 #| label: fig-pair-heatmap-appr-act-stage1
 #| fig-cap: "Approach × Action, Stage 1 (definition-text cosine similarity). Black border = in the top 5% of all ordered pairs of concept definitions on this measure."
 #| fig-height: 10
 tar_read(viz_pair_heatmap_appr_act_stage1_fig)
+```
+
+```{r}
+#| results: asis
+cat(fig_download_links_md("pair_heatmap_appr_act_stage1"))
 ```
 
 ### Stage 2 — cited-literature overlap (no embeddings)
@@ -142,10 +168,20 @@ tar_read(viz_sankey_appr_act_stage2_ggplot_fig)
 ```
 
 ```{r}
+#| results: asis
+cat(fig_download_links_md("sankey_appr_act_stage2_citation_overlap_ggplot"))
+```
+
+```{r}
 #| label: fig-pair-heatmap-appr-act-stage2
 #| fig-cap: "Approach × Action, Stage 2 (cited-literature Jaccard overlap). Black border = in the top 5% of all ordered pairs of concept definitions on this measure (the reference distribution includes the many zero-overlap pairs)."
 #| fig-height: 10
 tar_read(viz_pair_heatmap_appr_act_stage2_fig)
+```
+
+```{r}
+#| results: asis
+cat(fig_download_links_md("pair_heatmap_appr_act_stage2"))
 ```
 
 ### Semantic similarity, confirmed by shared citations
@@ -171,6 +207,11 @@ citation evidence do what it is actually able to do: corroborate.
 #| label: fig-pair-heatmap-appr-act-combined
 #| fig-height: 10
 tar_read(viz_pair_heatmap_appr_act_combined_fig)
+```
+
+```{r}
+#| results: asis
+cat(fig_download_links_md("pair_heatmap_appr_act_combined"))
 ```
 
 *Approach × Action. **Center number** (large) = the Stage-1 semantic

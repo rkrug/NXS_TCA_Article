@@ -66,6 +66,49 @@ save_widget_html <- function(w, name, dir = "output/figures") {
   invisible(path)
 }
 
+# output/figures/ is not tracked in git (see .gitignore), so a report that
+# links straight there would 404 once distributed. Called from the
+# report_* copy targets in _targets.R, once per report, after its render:
+# copies whichever export formats exist for each figure `name` alongside
+# the report's own tracked copy in output/reports/.
+copy_report_figures <- function(
+  names,
+  src_dir = "output/figures",
+  dest_dir = "output/reports/figures"
+) {
+  dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+  exts <- c("png", "svg", "pdf", "eps")
+  srcs <- file.path(src_dir, outer(names, exts, function(n, e) paste0(n, ".", e)))
+  srcs <- srcs[file.exists(srcs)]
+  dests <- file.path(dest_dir, basename(srcs))
+  ok <- file.copy(srcs, dests, overwrite = TRUE)
+  if (!all(ok)) {
+    stop("Could not copy: ", paste(srcs[!ok], collapse = ", "))
+  }
+  dests
+}
+
+# A "Download: PNG | SVG | PDF | EPS" markdown line for whichever formats
+# save_ggplot_fig() actually wrote for `name`. Existence is checked against
+# src_dir (output/figures/, populated by the viz_*_fig target at render
+# time); the emitted links point at link_dir because copy_report_figures()
+# lands the same files there, alongside the rendered report itself.
+fig_download_links_md <- function(
+  name,
+  src_dir = "output/figures",
+  link_dir = "figures"
+) {
+  exts <- c(PNG = "png", SVG = "svg", PDF = "pdf", EPS = "eps")
+  present <- exts[file.exists(file.path(src_dir, paste0(name, ".", exts)))]
+  if (length(present) == 0) {
+    return("")
+  }
+  links <- sprintf(
+    "[%s](%s)", names(present), file.path(link_dir, paste0(name, ".", present))
+  )
+  paste0("**Download:** ", paste(links, collapse = " · "))
+}
+
 # ---- keypaper coherence (self-similarity heatmap) --------------------------
 
 build_viz_keypaper_self_sim_data <- function(
