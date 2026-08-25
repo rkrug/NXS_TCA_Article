@@ -205,7 +205,8 @@ citation evidence do what it is actually able to do: corroborate.
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-combined
-#| fig-height: 10
+#| fig-width: 6.2992
+#| fig-height: 8.7402
 tar_read(viz_pair_heatmap_appr_act_combined_fig)
 ```
 
