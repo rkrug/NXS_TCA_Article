@@ -39,8 +39,7 @@ library(knitr)
 This report examines **how the keypaper concepts (the TCA/Nexus definitions)
 link to one another across the two key-sets** — especially the association
 between **TCA Approaches and TCA Actions** — and how coherent the keypaper set
-itself is. It builds toward the combined **Approach × Action** heatmap at the
-end.
+itself is. It builds toward the **Approach × Action** heatmap at the end.
 
 The heavier corpus-wide analyses (chapter alignment, score distributions,
 work-type and citation breakdowns) and the cited-literature-embedding "Stage 3"
@@ -206,9 +205,10 @@ Three limitations to keep in mind when reading Stage 2. First, it is close to
 rank (0.39), and the smallest non-zero overlap already jumps to 0.77. Second,
 Jaccard is **normalised by reference-list size**, so it measures proportional
 rather than absolute overlap — a pair sharing one reference out of few can
-outrank a pair sharing two out of many, and indeed does so here. Third, and
-consequently, definitions with **longer reference lists tend to look better
-connected** (r = 0.51 between citation count and mean combined score across
-Actions). The "Jaccard overlap" is Jaccard's coefficient of community
+outrank a pair sharing two out of many, and indeed does so here. Third, definitions with
+**longer reference lists tend to look better connected** — r = 0.42 between an
+Action's citation count and its mean semantic percentile across Approaches.
+Note this association survives even though the colour no longer uses citations
+at all, so it is not purely an artefact of the Jaccard measure. The "Jaccard overlap" is Jaccard's coefficient of community
 (Jaccard 1912, p. 39; species common to both / total species in both) — the
 term "Jaccard index" is a later name, not used in the original paper.*

@@ -1098,6 +1098,12 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x - key_w / 2, y = key_y - key_h / 2 - 1.15,
+      label = "cosine = raw definition-text similarity",
+      size = 2.82, color = "grey35", hjust = 0
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = key_x - key_w / 2, y = key_y - key_h / 2 - 1.75,
       label = "citation x10 = Jaccard x 10 (confirms)",
       size = 2.82, color = "grey35", hjust = 0
     ) +
