@@ -148,12 +148,24 @@ tar_read(viz_sankey_appr_act_stage2_ggplot_fig)
 tar_read(viz_pair_heatmap_appr_act_stage2_fig)
 ```
 
-### Combined (Stage 1 + Stage 2, equal weight)
+### Semantic similarity, confirmed by shared citations
 
-Each cell blends Stage 1 and Stage 2 as equal-weight indicators — each stage's
-value expressed as a percentile rank against the distribution of that measure
-over all ordered pairs of concept definitions, then averaged, so neither
-measure's raw scale dominates.
+The colour shows **Stage 1 alone** — the semantic similarity of the two
+definitions, expressed as a percentile rank against that measure's
+distribution over all ordered pairs of concept definitions. Stage 2 is *not*
+blended into it; it acts as an independent **confirmation** layer, carried by
+the border, the bold rule and the printed citation number.
+
+This is deliberate. Citation overlap is very sparse — only **22 of the 132**
+Approach × Action pairs share any cited work at all — so averaging it into a
+continuous scale added almost nothing while costing a great deal. Because
+every one of the 110 zero-overlap pairs receives the same constant Stage-2
+rank, the old blended score was an exact affine rescale of Stage 1 for those
+cells (correlation 1.000000); all the blending achieved was to compress them
+into the middle half of the colour scale, so that a semantically
+top-percentile pair with no shared citations could never appear more than
+mid-red. Showing Stage 1 directly restores the full range, and lets the
+citation evidence do what it is actually able to do: corroborate.
 
 ```{r}
 #| label: fig-pair-heatmap-appr-act-combined
@@ -161,36 +173,33 @@ measure's raw scale dominates.
 tar_read(viz_pair_heatmap_appr_act_combined_fig)
 ```
 
-*Approach × Action, combined Stage 1 + Stage 2 (equal-weight mean
-percentile). **Center number** (large) = the combined score; **bottom-left**
-(small) = Stage 1 definition-text cosine similarity; **bottom-right** (small)
-= Stage 2 cited-literature Jaccard overlap, **multiplied by 10** so it is
-legible (the raw values run 0–0.09, which would print as "0.00" for most
-cells); the scaling is display-only and does not affect the colour, the bold
-rule or the border. **Bold** marks a value in the top
-5% of all concept-definition pairs for its own measure; the center number is
-bold whenever either component is. Border style (solid = both stages, dashed =
-one stage only) is keyed in the figure's own "Individual-stage link" legend.
+*Approach × Action. **Center number** (large) = the Stage-1 semantic
+percentile, which is also what the **fill colour** shows; **bottom-left**
+(small) = the underlying raw cosine similarity; **bottom-right** (small) =
+Stage 2 cited-literature Jaccard overlap, **multiplied by 10** so it is
+legible (raw values run 0–0.09 and would print as "0.00" for most cells) —
+the scaling is display-only and affects neither the colour, the bold rule nor
+the border. **Bold** marks a value in the top 5% of all concept-definition
+pairs for its own measure. Border style (solid = both stages, dashed = one
+stage only) is keyed in the figure's own "Individual-stage link" legend.
 Emphasis follows the unrounded value, so two cells printing the same rounded
 number can differ.
 
-**Fill colour and border answer two different questions, and they need not
-agree.** The fill tracks the **center number** — *how unusual* this pair is —
-on ColorBrewer's colour-blind-safe RdBu palette, running from 0 to 1. Each
-stage's value is ranked against **all pairs of concept definitions, including
-Action–Action and Approach–Approach pairs**, and the two ranks are averaged.
-Because within-keyset pairs are systematically more similar than
-Approach × Action pairs, and because most pairs share no citations at all, the
-**typical Approach × Action cell scores about 0.43–0.45 rather than 0.5** —
-so the map reads predominantly blue. Read the colour as a relative ranking
-across the whole figure, not as an absolute statement that a given pair is
-"below typical".
+**The colour and the border answer different questions.** The fill is the
+Stage-1 percentile on ColorBrewer's colour-blind-safe RdBu palette, ranked
+against **all ordered pairs of concept definitions, including Action–Action
+and Approach–Approach pairs**. Because within-keyset pairs are systematically
+more similar than Approach × Action pairs, the plotted cells sit lower in that
+reference distribution than a naive reading of "0.5 = average" would suggest;
+treat the colour as a ranking across the figure rather than an absolute
+verdict on a single pair.
 
-The border answers instead whether an **individual stage** falls in the top 5%
-for its own measure, and the **small bottom numbers** are bold on the same
-test. A cell can therefore be distinctly red yet carry no border (42 cells
-here), or carry a border while sitting near white: the colour ranks the
-blended score, the border and bold marks flag the individual stages.
+The border and the bold citation number are the **confirmation**: they mark
+where an individual stage falls in the top 5% for its own measure. The
+informative combinations are a deeply red cell **with** a border — semantics
+and shared literature agreeing — and a pale cell **with** a dashed border,
+where the definitions are only moderately alike in wording but demonstrably
+draw on the same sources.
 
 Three limitations to keep in mind when reading Stage 2. First, it is close to
 **binary rather than graded**: pairs sharing no citations all sit at the same

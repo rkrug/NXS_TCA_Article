@@ -926,6 +926,18 @@ build_pair_heatmap_combined_fig <- function(
   # be top-decile on one stage and typical on the other -- so colour now
   # answers only "how unusual is this pair?", and the border/bold marks remain
   # the sole, authoritative significance signal.
+  #
+  # The fill is the STAGE-1 (semantic) percentile, not the blended score.
+  # Blending was close to a no-op that cost dynamic range: 110 of 132 cells
+  # share no citations at all, and for every one of them stage 2 contributes
+  # the same constant 0.393, making `combined` an exact affine rescale of
+  # stage 1 (correlation 1.000000). All it achieved was to squeeze those cells
+  # from the full percentile range into 0.197-0.673 -- the middle half of the
+  # scale -- so a semantically top-percentile pair with no shared citations
+  # could never render as more than mid-red. Citation evidence is far too
+  # sparse (22 of 132 pairs) to average into a continuous scale; it is
+  # CONFIRMATORY instead, carried by the border, the bold rule and the printed
+  # citation number.
   div_colors <- c("#2166AC", "#92C5DE", "#F7F7F7", "#F4A582", "#B2182B")
   knot_pos <- c(0, 0.25, 0.5, 0.75, 1)
 
@@ -938,7 +950,7 @@ build_pair_heatmap_combined_fig <- function(
   key_x <- -1.6
   key_y <- -2.4
   cell_colors <- scales::gradient_n_pal(div_colors, values = knot_pos)(
-    d$combined
+    d$percentile_stage1
   )
   cell_rgb <- grDevices::col2rgb(cell_colors) / 255
   luminance <- 0.2126 *
@@ -954,9 +966,10 @@ build_pair_heatmap_combined_fig <- function(
   )
 
   # Bold only the numbers that themselves indicate a real link (above that
-  # measure's own 95th percentile); the center combined number bolds
-  # whenever either component does, matching when a border is drawn at all.
-  fontface_combined <- ifelse(d$n_agree >= 1, "bold", "plain")
+  # measure's own 95th percentile). The centre number is the stage-1
+  # percentile, so it follows stage 1 -- not n_agree, which would bold it for
+  # a citation-only link the colour does not represent.
+  fontface_combined <- ifelse(d$real_diff_stage1, "bold", "plain")
   fontface_sim <- ifelse(d$real_diff_stage1, "bold", "plain")
   fontface_jaccard <- ifelse(d$real_diff_stage2, "bold", "plain")
 
@@ -968,8 +981,8 @@ build_pair_heatmap_combined_fig <- function(
   muted_color <- ifelse(d$text_color == "white", "grey80", "grey45")
   color_sim <- ifelse(d$real_diff_stage1, d$text_color, muted_color)
   color_jaccard <- ifelse(d$real_diff_stage2, d$text_color, muted_color)
-  # Same treatment for the centre number, keyed on whether EITHER stage links.
-  color_combined <- ifelse(d$n_agree >= 1, d$text_color, muted_color)
+  # Same treatment for the centre number, keyed on its own stage.
+  color_combined <- ifelse(d$real_diff_stage1, d$text_color, muted_color)
 
   p <- ggplot2::ggplot(d, ggplot2::aes(x = xn, y = yn)) +
     # Fill only -- the borders are a separate inset layer below. Drawing them
@@ -978,7 +991,7 @@ build_pair_heatmap_combined_fig <- function(
     # border; on a dashed outline that erases individual dashes and is why
     # they were hard to make out.
     ggplot2::geom_tile(
-      ggplot2::aes(fill = combined),
+      ggplot2::aes(fill = percentile_stage1),
       width = 1,
       height = 1
     ) +
@@ -1016,7 +1029,7 @@ build_pair_heatmap_combined_fig <- function(
       linewidth = 0.7
     ) +
     ggplot2::geom_text(
-      ggplot2::aes(x = xn, y = yn + 0.15, label = sprintf("%.2f", combined)),
+      ggplot2::aes(x = xn, y = yn + 0.15, label = sprintf("%.2f", percentile_stage1)),
       color = color_combined,
       fontface = fontface_combined,
       # PLOS requires all in-figure text to be 8-12 pt. ggplot's `size` is in
@@ -1063,12 +1076,12 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x, y = key_y + key_h * 0.15,
-      label = "combined", size = 2.82, fontface = "bold", color = "grey20"
+      label = "semantic pct", size = 2.82, fontface = "bold", color = "grey20"
     ) +
     ggplot2::annotate(
       "text",
       x = key_x - key_w * 0.26, y = key_y - key_h * 0.30,
-      label = "semantic", size = 2.82, color = "grey35"
+      label = "cosine", size = 2.82, color = "grey35"
     ) +
     ggplot2::annotate(
       "text",
@@ -1079,17 +1092,17 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x - key_w / 2, y = key_y - key_h / 2 - 0.55,
-      label = "semantic = cosine similarity",
+      label = "semantic pct = cosine rank (= colour)",
       size = 2.82, color = "grey35", hjust = 0
     ) +
     ggplot2::annotate(
       "text",
       x = key_x - key_w / 2, y = key_y - key_h / 2 - 1.15,
-      label = "citation = Jaccard overlap x 10",
+      label = "citation x10 = Jaccard x 10 (confirms)",
       size = 2.82, color = "grey35", hjust = 0
     ) +
     ggplot2::scale_fill_gradientn(
-      name = "combined (mean percentile)",
+      name = "semantic similarity (percentile)",
       colours = div_colors,
       values = knot_pos,
       limits = c(0, 1),
