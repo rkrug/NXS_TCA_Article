@@ -40,7 +40,7 @@ build_report_index <- function(
 
   items <- vapply(entries, function(e) {
     sprintf(
-      '      <li>\n        <a href="%s">%s</a>\n        <p>%s</p>\n      </li>',
+      '      <li>\n        <a href="%s" target="_blank" rel="noopener">%s</a>\n        <p>%s</p>\n      </li>',
       .html_escape(e$href), .html_escape(e$title), .html_escape(e$desc)
     )
   }, character(1))
