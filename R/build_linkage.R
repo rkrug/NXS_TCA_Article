@@ -1011,7 +1011,11 @@ build_pair_heatmap_combined_fig <- function(
       ggplot2::aes(
         x = xn + 0.25,
         y = yn - 0.28,
-        label = sprintf("%.2f", jaccard)
+        # x10 so the Jaccard is legible: real values run 0-0.09, which would
+        # print as "0.00" for most cells. The in-figure key and the caption
+        # both state the scaling; bold/border still key off the UNSCALED
+        # value, so the emphasis rule is unaffected.
+        label = sprintf("%.2f", jaccard * 10)
       ),
       color = color_jaccard,
       fontface = fontface_jaccard,
@@ -1046,7 +1050,7 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x + key_w * 0.26, y = key_y - key_h * 0.30,
-      label = "citation", size = 2.82, color = "grey35"
+      label = "citation x10", size = 2.82, color = "grey35"
     ) +
     # Name the underlying measure for each of the two per-stage numbers.
     ggplot2::annotate(
@@ -1058,7 +1062,7 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x - key_w / 2, y = key_y - key_h / 2 - 1.15,
-      label = "citation = Jaccard overlap",
+      label = "citation = Jaccard overlap x 10",
       size = 2.82, color = "grey35", hjust = 0
     ) +
     ggplot2::scale_fill_gradientn(

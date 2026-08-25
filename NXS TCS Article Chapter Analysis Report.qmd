@@ -164,7 +164,10 @@ tar_read(viz_pair_heatmap_appr_act_combined_fig)
 *Approach × Action, combined Stage 1 + Stage 2 (equal-weight mean
 percentile). **Center number** (large) = the combined score; **bottom-left**
 (small) = Stage 1 definition-text cosine similarity; **bottom-right** (small)
-= Stage 2 cited-literature Jaccard overlap. **Bold** marks a value in the top
+= Stage 2 cited-literature Jaccard overlap, **multiplied by 10** so it is
+legible (the raw values run 0–0.09, which would print as "0.00" for most
+cells); the scaling is display-only and does not affect the colour, the bold
+rule or the border. **Bold** marks a value in the top
 5% of all concept-definition pairs for its own measure; the center number is
 bold whenever either component is. Border style (solid = both stages, dashed =
 one stage only) is keyed in the figure's own "Individual-stage link" legend.
