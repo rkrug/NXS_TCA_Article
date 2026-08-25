@@ -1,0 +1,69 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='648.00pt' height='396.00pt' viewBox='0 0 648.00 396.00'>
+<g class='svglite'>
+<defs>
+  <style type='text/css'><![CDATA[
+    .svglite line, .svglite polyline, .svglite polygon, .svglite path, .svglite rect, .svglite circle {
+      fill: none;
+      stroke: #000000;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-miterlimit: 10.00;
+    }
+    .svglite text {
+      white-space: pre;
+    }
+    .svglite g.glyphgroup path {
+      fill: inherit;
+      stroke: none;
+    }
+  ]]></style>
+</defs>
+<rect width='100%' height='100%' style='stroke: none; fill: #FFFFFF;'/>
+<defs>
+  <clipPath id='cpMC4wMHw2NDguMDB8MC4wMHwzOTYuMDA='>
+    <rect x='0.00' y='0.00' width='648.00' height='396.00' />
+  </clipPath>
+</defs>
+<g clip-path='url(#cpMC4wMHw2NDguMDB8MC4wMHwzOTYuMDA=)'>
+<rect x='0.00' y='0.000000000000057' width='648.00' height='396.00' style='stroke-width: 1.07; stroke: none; fill: #FFFFFF;' />
+</g>
+<defs>
+  <clipPath id='cpMzguMDJ8NTU3LjI3fDIzLjE4fDM0MC41OA=='>
+    <rect x='38.02' y='23.18' width='519.25' height='317.41' />
+  </clipPath>
+</defs>
+<g clip-path='url(#cpMzguMDJ8NTU3LjI3fDIzLjE4fDM0MC41OA==)'>
+<polyline points='38.02,274.81 557.27,274.81 ' style='stroke-width: 0.53; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='38.02,172.12 557.27,172.12 ' style='stroke-width: 0.53; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='38.02,69.44 557.27,69.44 ' style='stroke-width: 0.53; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='38.02,326.16 557.27,326.16 ' style='stroke-width: 1.07; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='38.02,223.47 557.27,223.47 ' style='stroke-width: 1.07; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='38.02,120.78 557.27,120.78 ' style='stroke-width: 1.07; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='179.63,340.58 179.63,23.18 ' style='stroke-width: 1.07; stroke: #EBEBEB; stroke-linecap: butt;' />
+<polyline points='415.65,340.58 415.65,23.18 ' style='stroke-width: 1.07; stroke: #EBEBEB; stroke-linecap: butt;' />
+<rect x='73.42' y='49.41' width='212.42' height='268.01' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #6B7280;' />
+<rect x='73.42' y='317.43' width='212.42' height='8.73' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #16A34A;' />
+<rect x='73.42' y='37.60' width='212.42' height='11.81' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #2563EB;' />
+<rect x='309.44' y='250.17' width='212.42' height='74.45' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #6B7280;' />
+<rect x='309.44' y='324.61' width='212.42' height='1.54' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #16A34A;' />
+<rect x='309.44' y='248.63' width='212.42' height='1.54' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #2563EB;' />
+</g>
+<g clip-path='url(#cpMC4wMHw2NDguMDB8MC4wMHwzOTYuMDA=)'>
+<text x='33.09' y='329.31' text-anchor='end' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='4.89px' lengthAdjust='spacingAndGlyphs'>0</text>
+<text x='33.09' y='226.62' text-anchor='end' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='14.67px' lengthAdjust='spacingAndGlyphs'>200</text>
+<text x='33.09' y='123.93' text-anchor='end' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='14.67px' lengthAdjust='spacingAndGlyphs'>400</text>
+<text transform='translate(182.29,351.22) rotate(-25)' text-anchor='end' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='72.39px' lengthAdjust='spacingAndGlyphs'>TCA_Actions_Ch5</text>
+<text transform='translate(418.31,351.22) rotate(-25)' text-anchor='end' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='89.02px' lengthAdjust='spacingAndGlyphs'>TCA_Approaches_3_2</text>
+<text transform='translate(13.36,181.88) rotate(-90)' text-anchor='middle' style='font-size: 11.00px; font-family: "Arial";' textLength='146.20px' lengthAdjust='spacingAndGlyphs'>distinct (author, year) citations</text>
+<text x='573.70' y='157.16' style='font-size: 11.00px; font-family: "Arial";' textLength='42.25px' lengthAdjust='spacingAndGlyphs'>found by</text>
+<rect x='574.41' y='164.51' width='15.86' height='15.86' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #2563EB;' />
+<rect x='574.41' y='181.79' width='15.86' height='15.86' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #6B7280;' />
+<rect x='574.41' y='199.07' width='15.86' height='15.86' style='stroke-width: 1.07; stroke: none; stroke-linecap: butt; stroke-linejoin: miter; fill: #16A34A;' />
+<text x='596.46' y='175.59' style='font-size: 8.80px; font-family: "Arial";' textLength='40.58px' lengthAdjust='spacingAndGlyphs'>regex only</text>
+<text x='596.46' y='192.87' style='font-size: 8.80px; font-family: "Arial";' textLength='17.11px' lengthAdjust='spacingAndGlyphs'>both</text>
+<text x='596.46' y='210.15' style='font-size: 8.80px; font-family: "Arial";' textLength='29.81px' lengthAdjust='spacingAndGlyphs'>llm only</text>
+<text x='38.02' y='14.93' style='font-size: 13.20px; font-family: "Arial";' textLength='326.69px' lengthAdjust='spacingAndGlyphs'>Citation extraction agreement: regex vs LLM, per keyset</text>
+</g>
+</g>
+</svg>
