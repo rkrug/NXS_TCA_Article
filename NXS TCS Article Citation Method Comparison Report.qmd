@@ -1,5 +1,5 @@
 ---
-title: "NXS TCS Article — Citation Method Comparison"
+title: "Citation Identification Method Comparison"
 subtitle: "Regex vs LLM (OpenRouter) identification of in-text citations in the definitions"
 author:
   - name:
@@ -172,7 +172,7 @@ cat(sprintf(
   "**Model:** `%s` — temperature %s, timeout %ss, %s parallel workers.\n\n",
   llmc$model, llmc$temperature, llmc$timeout, llmc$workers
 ))
-cat("```\n", .LLM_CITE_PROMPT, "\n```\n", sep = "")
+cat("> ", gsub("\n", "\n> ", .LLM_CITE_PROMPT), "\n", sep = "")
 ```
 
 ## Regex rules
@@ -187,11 +187,10 @@ definition for:
 
 In both cases the first-author surname is normalised (lower-cased, diacritics
 folded, initials / "et al." dropped) into the `author_key` used for resolution.
-The year is matched with:
-
+The year is matched with the regex
 ```{r}
 #| label: regex-year
 #| echo: false
 #| results: asis
-cat("```\n", .CITE_YEAR, "\n```\n", sep = "")
+cat(sprintf("`%s`.", .CITE_YEAR))
 ```

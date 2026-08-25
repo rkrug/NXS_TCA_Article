@@ -17,9 +17,9 @@ build_report_index <- function(
   entries <- list(
     list(
       href = basename(report_analysis),
-      title = "Chapter Analysis Report",
+      title = "Linkage TCA Approaches - TCA Actions",
       desc = paste(
-        "Keypaper coherence and keyset linkage: how the TCA Approaches and",
+        "Definition coherence and keyset linkage: how the TCA Approaches and",
         "TCA Actions definitions relate to one another by semantic",
         "similarity (embeddings) and by shared citations, ending in the",
         "Approach × Action heatmap (semantic similarity, confirmed by",
@@ -28,10 +28,10 @@ build_report_index <- function(
     ),
     list(
       href = basename(report_citation_comparison),
-      title = "Citation Method Comparison Report",
+      title = "Citation Identification Method Comparison",
       desc = paste(
         "Compares the two methods used to extract in-text citations from the",
-        "keypaper definitions -- a deterministic regex parser and an LLM",
+        "concept definitions -- a deterministic regex parser and an LLM",
         "(OpenRouter) -- including where they agree, where they disagree,",
         "and citations neither could resolve."
       )

@@ -1,5 +1,5 @@
 ---
-title: "NXS TCS Article — Chapter Analysis"
+title: "Linkage TCA Approaches - TCA Actions"
 subtitle: "How do the concept definitions link across the TCA/Nexus key-sets?"
 author:
   - name:
