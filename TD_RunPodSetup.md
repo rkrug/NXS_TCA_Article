@@ -1,4 +1,10 @@
-# TD: Running the TEI embedding server on RunPod
+---
+title: "TD: Running the TEI embedding server on RunPod"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
 
 Companion to [TD_Vectorisation.md](TD_Vectorisation.md). This is how the
 embeddings for `emb_keypapers_title_abstract` are produced: a

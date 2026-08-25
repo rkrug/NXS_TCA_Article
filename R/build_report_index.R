@@ -9,12 +9,26 @@
   x
 }
 
+# The TD_*.md docs link to each other by their own filename
+# (`[TD_X.md](TD_X.md)`), which is correct for reading them as source on
+# GitHub. Quarto's standalone (non-project) render does not rewrite those
+# cross-document links, so once copied into out_dir as TD_X.html they would
+# 404. Rewrite them post-render instead of touching the source links.
+fix_td_cross_links <- function(html_path) {
+  txt <- readLines(html_path, warn = FALSE)
+  txt <- gsub('href="(TD_[A-Za-z]+)\\.md"', 'href="\\1.html"', txt)
+  writeLines(txt, html_path)
+  invisible(html_path)
+}
+
 build_report_index <- function(
   report_analysis,
   report_citation_comparison,
+  td_vectorisation,
+  td_runpod_setup,
   out_dir = "output/reports"
 ) {
-  entries <- list(
+  reports <- list(
     list(
       href = basename(report_analysis),
       title = "Linkage TCA Approaches - TCA Actions",
@@ -38,12 +52,35 @@ build_report_index <- function(
     )
   )
 
-  items <- vapply(entries, function(e) {
-    sprintf(
-      '      <li>\n        <a href="%s" target="_blank" rel="noopener">%s</a>\n        <p>%s</p>\n      </li>',
-      .html_escape(e$href), .html_escape(e$title), .html_escape(e$desc)
+  design_docs <- list(
+    list(
+      href = basename(td_vectorisation),
+      title = "TD -- Vectorisation (TEI embeddings)",
+      desc = paste(
+        "Design note on the embedding model and text handling: which model",
+        "is active, how title/abstract are joined, and how the embedding",
+        "pipeline is structured."
+      )
+    ),
+    list(
+      href = basename(td_runpod_setup),
+      title = "TD -- Running the TEI embedding server on RunPod",
+      desc = paste(
+        "Design note on the RunPod side: starting/stopping the TEI pod that",
+        "serves embeddings to the pipeline, and where the pod images come",
+        "from."
+      )
     )
-  }, character(1))
+  )
+
+  render_items <- function(entries) {
+    vapply(entries, function(e) {
+      sprintf(
+        '      <li>\n        <a href="%s" target="_blank" rel="noopener">%s</a>\n        <p>%s</p>\n      </li>',
+        .html_escape(e$href), .html_escape(e$title), .html_escape(e$desc)
+      )
+    }, character(1))
+  }
 
   html <- sprintf(
     '<!DOCTYPE html>
@@ -55,6 +92,7 @@ build_report_index <- function(
   body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
          max-width: 42rem; margin: 3rem auto; padding: 0 1.5rem; color: #222; }
   h1 { font-size: 1.4rem; }
+  h2 { font-size: 1rem; color: #666; margin-top: 2.5rem; }
   ul { list-style: none; padding: 0; }
   li { margin: 1.5rem 0; padding: 1rem 1.25rem; border: 1px solid #ddd;
        border-radius: 6px; }
@@ -69,10 +107,15 @@ build_report_index <- function(
 <ul>
 %s
 </ul>
+<h2>Design docs</h2>
+<ul>
+%s
+</ul>
 </body>
 </html>
 ',
-    paste(items, collapse = "\n")
+    paste(render_items(reports), collapse = "\n"),
+    paste(render_items(design_docs), collapse = "\n")
   )
 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)

@@ -468,14 +468,77 @@ list(
     format = "file"
   ),
 
-  # Landing page linking to the two reports above. Depends on both copy
-  # targets (not the render_* ones) so it always points at the files that
-  # actually landed in output/reports/, and only builds once they have.
+  # Render the two standalone TD (technical design) docs alongside the
+  # reports. Plain .md, no executable chunks -- rendered for the read-only
+  # HTML copy; the .md remains the source of truth read on GitHub.
+  tarchetypes::tar_quarto(
+    render_td_vectorisation,
+    path = "TD_Vectorisation.md",
+    output_file = "TD_Vectorisation.html",
+    quiet = TRUE
+  ),
+  tarchetypes::tar_quarto(
+    render_td_runpod_setup,
+    path = "TD_RunPodSetup.md",
+    output_file = "TD_RunPodSetup.html",
+    quiet = TRUE
+  ),
+  tar_target(
+    td_vectorisation,
+    {
+      src <- render_td_vectorisation[grepl("\\.html$", render_td_vectorisation)]
+      if (length(src) != 1) {
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_td_vectorisation's tracked files, got: ",
+          paste(render_td_vectorisation, collapse = ", ")
+        )
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
+      fix_td_cross_links(dest)
+      dest
+    },
+    format = "file"
+  ),
+  tar_target(
+    td_runpod_setup,
+    {
+      src <- render_td_runpod_setup[grepl("\\.html$", render_td_runpod_setup)]
+      if (length(src) != 1) {
+        stop(
+          "Expected exactly one rendered .html among ",
+          "render_td_runpod_setup's tracked files, got: ",
+          paste(render_td_runpod_setup, collapse = ", ")
+        )
+      }
+      dest_dir <- "output/reports"
+      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+      dest <- file.path(dest_dir, basename(src))
+      if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("Could not copy ", src, " to ", dest)
+      }
+      fix_td_cross_links(dest)
+      dest
+    },
+    format = "file"
+  ),
+
+  # Landing page linking to the two reports and two TD docs above. Depends
+  # on the copy targets (not the render_* ones) so it always points at the
+  # files that actually landed in output/reports/, and only builds once
+  # they have.
   tar_target(
     report_index,
     build_report_index(
       report_analysis,
       report_citation_comparison,
+      td_vectorisation,
+      td_runpod_setup,
       out_dir = "output/reports"
     ),
     format = "file"

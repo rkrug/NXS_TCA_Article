@@ -1,4 +1,10 @@
-# TD — Vectorisation (TEI embeddings)
+---
+title: "TD — Vectorisation (TEI embeddings)"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
 
 Companion to [TD_RunPodSetup.md](TD_RunPodSetup.md), which covers running the
 TEI server itself. This file covers the embedding model and text handling.
