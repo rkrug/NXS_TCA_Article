@@ -1076,7 +1076,7 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x, y = key_y + key_h * 0.15,
-      label = "semantic pct", size = 2.82, fontface = "bold", color = "grey20"
+      label = "semantic percentile", size = 2.82, fontface = "bold", color = "grey20"
     ) +
     ggplot2::annotate(
       "text",
@@ -1092,7 +1092,7 @@ build_pair_heatmap_combined_fig <- function(
     ggplot2::annotate(
       "text",
       x = key_x - key_w / 2, y = key_y - key_h / 2 - 0.55,
-      label = "semantic pct = cosine rank (= colour)",
+      label = "semantic percentile: cosine rank (colour)",
       size = 2.82, color = "grey35", hjust = 0
     ) +
     ggplot2::annotate(
