@@ -468,5 +468,18 @@ list(
     format = "file"
   ),
 
+  # Landing page linking to the two reports above. Depends on both copy
+  # targets (not the render_* ones) so it always points at the files that
+  # actually landed in output/reports/, and only builds once they have.
+  tar_target(
+    report_index,
+    build_report_index(
+      report_analysis,
+      report_citation_comparison,
+      out_dir = "output/reports"
+    ),
+    format = "file"
+  ),
+
   NULL
 )
