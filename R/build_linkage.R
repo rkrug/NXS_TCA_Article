@@ -64,6 +64,29 @@ build_link_stage1_data <- function(emb_keypapers_title_abstract, key_works) {
     ))
   }
 
+  # And the other direction: every definition MUST have an embedding. Without
+  # this check a missing vector is not an error -- build_pair_heatmap_data()
+  # zero-fills absent pairs, so the definition would be plotted as a measured
+  # cosine of exactly 0.00 (against a real range of ~0.49-0.85), and the extra
+  # zero-padding of the percentile background would shift every other cell in
+  # the figure too. embed_works()'s skip-guard compares row counts only, so a
+  # definition added to the xlsx can silently arrive here unembedded. Fail
+  # loudly instead of publishing fabricated zeros.
+  missing_emb <- setdiff(meta$id, emb$id)
+  if (length(missing_emb)) {
+    stop(sprintf(
+      paste0(
+        "[link_stage1] %d of %d definitions have no embedding: %s.\n",
+        "  The embedding leaf is stale. embed_works() skips re-embedding when ",
+        "the leaf's row count matches its .embed_complete marker, so delete\n",
+        "  <embeddings>/config=*/source=keypaper/variant=*/.embed_complete ",
+        "and rebuild with the TEI pod running."
+      ),
+      length(missing_emb), nrow(meta),
+      paste(utils::head(missing_emb, 5), collapse = ", ")
+    ))
+  }
+
   M <- .unit_rows(emb)
   sims <- M %*% t(M)
   rownames(sims) <- emb$id
