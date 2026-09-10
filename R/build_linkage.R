@@ -1,18 +1,20 @@
 # Keyset-to-keyset linkage analysis: how the concept definitions (keypapers)
-# link to one another, in three stages, and Sankey diagrams built from them.
-# Primary interest: TCA Action (keyset TCA_Actions_Ch5) -> Nexus Response
-# Option (keyset Nexus_Response_Options).
+# link to one another, on two signals, and Sankey diagrams built from them.
+# Primary interest: TCA Approaches (keyset TCA_Approaches_3_2) -> TCA Actions
+# (keyset TCA_Actions_Ch5).
 #
-#   Stage 1 — similarity of the definition texts themselves (SPECTER2 keypaper
+#   Stage 1 — similarity of the definition texts themselves (keypaper
 #             embeddings; cosine).
 #   Stage 2 — overlap of the literature each definition CITES (no embeddings;
 #             shared cited works / Jaccard on the resolved-citation sets).
-#   Stage 3 — similarity of the CITED literature's embeddings (mean pairwise
-#             cosine of the two keypapers' cited-work embedding sets).
+#
+# (A Stage 3 — similarity of the CITED literature's embeddings — existed in an
+# earlier iteration; it needed full-corpus embeddings, since removed. See git
+# history for build_link_stage3_data().)
 #
 # Each *_data builder returns a long keypaper x keypaper edge list with keyset
-# labels attached; build_sankey_fig() renders one directed Sankey for a chosen
-# source->target keyset pair (top-N links per source node), and
+# labels attached; build_sankey_fig_ggplot() renders one directed Sankey for a
+# chosen source->target keyset pair (top-N links per source node), and
 # build_keyset_matrix_fig() renders the keyset x keyset aggregate heatmap.
 
 # Read (id -> keyset, title, code, short_name, category) for node labelling /
@@ -164,225 +166,6 @@ build_link_stage2_data <- function(citations_resolved, key_works) {
   tibble::as_tibble(do.call(rbind, rows))
 }
 
-# ---- Stage 3: cited-literature embedding similarity (mean pairwise cosine) -
-# Mean pairwise cosine between two keypapers' cited-work embedding sets equals
-# the dot product of their centroids-of-unit-vectors (NOT re-normalised):
-#   mean_{a in A, b in B} <â, b̂> = <mean_a â, mean_b b̂>.
-# So we compute one centroid per keypaper and take pairwise dot products —
-# O(n+m) per pair instead of O(n·m).
-build_link_stage3_data <- function(
-  citations_resolved,
-  emb_cited_title_abstract,
-  key_works
-) {
-  emb <- arrow::open_dataset(emb_cited_title_abstract) |>
-    dplyr::select(id, dplyr::starts_with("V")) |>
-    dplyr::collect()
-  U <- .unit_rows(emb) # unit vectors, rows aligned to emb$id
-  rownames(U) <- emb$id
-
-  res <- arrow::open_dataset(citations_resolved) |>
-    dplyr::filter(!is.na(matched_id)) |>
-    dplyr::select(keypaper_id, keyset, matched_id) |>
-    dplyr::collect() |>
-    dplyr::distinct()
-  # keep only cited works that actually have an embedding
-  res <- res[res$matched_id %in% rownames(U), , drop = FALSE]
-
-  sets <- split(res$matched_id, res$keypaper_id)
-  sets <- lapply(sets, unique)
-  ids <- names(sets)
-  ks <- stats::setNames(
-    res$keyset[!duplicated(res$keypaper_id)],
-    res$keypaper_id[!duplicated(res$keypaper_id)]
-  )
-
-  # centroid of unit vectors per keypaper
-  cent <- t(vapply(
-    ids,
-    function(k) {
-      colMeans(U[sets[[k]], , drop = FALSE])
-    },
-    numeric(ncol(U))
-  ))
-  rownames(cent) <- ids
-
-  sims <- cent %*% t(cent) # mean pairwise cosine
-  long <- tibble::as_tibble(as.data.frame.table(
-    sims,
-    responseName = "sim",
-    stringsAsFactors = FALSE
-  )) |>
-    dplyr::rename(id_a = Var1, id_b = Var2) |>
-    dplyr::mutate(
-      sim = as.numeric(sim),
-      n_cited_a = lengths(sets)[id_a],
-      n_cited_b = lengths(sets)[id_b],
-      keyset_a = unname(ks[id_a]),
-      keyset_b = unname(ks[id_b])
-    ) |>
-    dplyr::filter(id_a != id_b)
-  long
-}
-
-# ---- Sankey: one directed keyset->keyset diagram --------------------------
-# edge_data: long df with id_a/id_b/keyset_a/keyset_b + a numeric value column.
-# Keeps the top_n strongest links per source node (source keyset -> target
-# keyset), labels nodes by keypaper title, colours by keyset. Built with
-# echarts4r (ECharts) rather than plotly: ECharts' sankey series supports
-# per-node label position ("left"/"right", rendered outside the node with no
-# manual annotation/margin math) and ships built-in hover-adjacency
-# highlighting (`emphasis.focus = "adjacency"`) — both were only achievable in
-# plotly via hand-rolled paper-coordinate annotations and had no hover
-# highlighting equivalent at all.
-build_sankey_fig <- function(
-  edge_data,
-  key_works,
-  value_col,
-  name,
-  source_keyset = "TCA_Actions_Ch5",
-  target_keyset = "Nexus_Response_Options",
-  top_n = 3,
-  figures_dir = "output/figures"
-) {
-  meta <- .keypaper_meta(key_works)
-  title_lbl <- ifelse(
-    is.na(meta$title) | !nzchar(meta$title),
-    meta$id,
-    substr(meta$title, 1, 60)
-  )
-  # Prepend the code where the keyset has one (e.g. Nexus Response Options'
-  # "B01") and it isn't already baked into the title (TCA Actions' titles
-  # already start with "Action 1.1: ...").
-  has_code <- !is.na(meta$code) & nzchar(meta$code)
-  label_of <- stats::setNames(
-    ifelse(has_code, paste(meta$code, title_lbl), title_lbl),
-    meta$id
-  )
-
-  e <- edge_data[
-    edge_data$keyset_a == source_keyset &
-      edge_data$keyset_b == target_keyset,
-    ,
-    drop = FALSE
-  ]
-  e$value <- as.numeric(e[[value_col]])
-  e <- e[is.finite(e$value) & e$value > 0, , drop = FALSE]
-
-  # top_n targets per source node by value
-  e <- e[order(e$id_a, -e$value), , drop = FALSE]
-  e <- do.call(rbind, lapply(split(e, e$id_a), utils::head, n = top_n))
-  if (is.null(e)) {
-    e <- data.frame(
-      id_a = character(0),
-      id_b = character(0),
-      value = numeric(0)
-    )
-  }
-
-  # Every Action / Response Option is shown as a node, even ones with no
-  # qualifying link (they just end up unconnected) — so the diagram reflects
-  # the full keyset, not only the subset that happened to survive top_n.
-  # Sort by display label (not raw id) so nodes read alphabetically
-  # top-to-bottom; ECharts' `layout="none"` + explicit per-node x/y (below)
-  # honours this order exactly (unlike plotly's default "snap" arrangement,
-  # which repositions nodes to minimize link crossings and ignores array
-  # order).
-  src_ids <- meta$id[meta$keyset == source_keyset]
-  src_ids <- src_ids[order(unname(label_of[src_ids]))]
-  tgt_ids <- meta$id[meta$keyset == target_keyset]
-  tgt_ids <- tgt_ids[order(unname(label_of[tgt_ids]))]
-
-  # node.y=0 is the top; evenly space each column top-to-bottom in the
-  # alphabetical order established above.
-  y_pos <- function(n) if (n <= 1) 0.5 else seq(0.02, 0.98, length.out = n)
-  src_y <- y_pos(length(src_ids))
-  tgt_y <- y_pos(length(tgt_ids))
-
-  .make_side <- function(ids, y, x, color, side) {
-    unname(Map(
-      function(id, yy) {
-        full <- unname(label_of[id])
-        list(
-          name = id,
-          x = x,
-          y = yy,
-          itemStyle = list(color = color),
-          label = list(
-            position = side,
-            formatter = htmlwidgets::JS("function(p){return p.data.disp;}")
-          ),
-          disp = substr(full, 1, 30),
-          full = full
-        )
-      },
-      ids,
-      y
-    ))
-  }
-  nodes <- c(
-    .make_side(src_ids, src_y, 0.05, "#2563eb", "left"),
-    .make_side(tgt_ids, tgt_y, 0.95, "#16a34a", "right")
-  )
-
-  links <- unname(Map(
-    function(a, b, v) {
-      list(
-        source = a,
-        target = b,
-        value = v,
-        label_text = sprintf("%s = %.3f", value_col, v)
-      )
-    },
-    e$id_a,
-    e$id_b,
-    e$value
-  ))
-
-  opt <- list(
-    title = list(
-      text = sprintf(
-        "%s → %s (top %d per node, by %s)",
-        source_keyset,
-        target_keyset,
-        top_n,
-        value_col
-      ),
-      left = "center",
-      textStyle = list(fontSize = 13)
-    ),
-    tooltip = list(
-      trigger = "item",
-      triggerOn = "mousemove",
-      formatter = htmlwidgets::JS(
-        "function(p){
-           if (p.dataType === 'edge') { return p.data.label_text; }
-           return p.data.full;
-         }"
-      )
-    ),
-    series = list(list(
-      type = "sankey",
-      layout = "none",
-      left = "20%",
-      right = "20%",
-      top = "8%",
-      bottom = "2%",
-      emphasis = list(focus = "adjacency"),
-      data = nodes,
-      links = links,
-      label = list(fontSize = 10),
-      lineStyle = list(color = "gray", opacity = 0.35, curveness = 0.5),
-      nodeWidth = 16,
-      nodeGap = 8
-    ))
-  )
-
-  w <- echarts4r::e_charts() |> echarts4r::e_list(opt)
-  save_widget_html(w, name, figures_dir)
-  w
-}
-
 # Interpolate a smooth S-curve between (x0,y0) and (x1,y1) — smoothstep easing
 # on y so the "ribbon" leaves/arrives roughly horizontal at each node, the
 # same visual convention as a real Sankey link (used by build_sankey_fig_ggplot).
@@ -392,14 +175,14 @@ build_sankey_fig <- function(
   data.frame(x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * s)
 }
 
-# ---- Sankey (static ggplot alternative) -----------------------------------
-# Same contract as build_sankey_fig() (identical args, same top_n/all-nodes/
-# alphabetical-order semantics) but hand-drawn with ggplot2 instead of
-# echarts4r: links are manually interpolated S-curves (geom_path, linewidth ~
-# value), nodes are geom_segment ticks, labels are geom_text placed outside
-# the plotting area via clip = "off". Static PNG — no hover highlighting,
-# but pixel-exact label placement/sizing needs none of the paper-coordinate
-# or layout-relaxation workarounds the interactive versions required.
+# ---- Sankey (static ggplot) -----------------------------------------------
+# Renders one directed Sankey for a chosen source->target keyset pair
+# (top-N links per source node, labelled by keypaper title, coloured by
+# keyset), hand-drawn with ggplot2: links are manually interpolated S-curves
+# (geom_path, linewidth ~ value), nodes are geom_segment ticks, labels are
+# geom_text placed outside the plotting area via clip = "off". Static PNG.
+# (An earlier interactive echarts4r version, build_sankey_fig(), was removed
+# — see git history.)
 build_sankey_fig_ggplot <- function(
   edge_data,
   key_works,

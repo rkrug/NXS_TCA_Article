@@ -2,9 +2,9 @@ workers: 8
 
 # Zotero group libraries the corpus is built from. Each assessment becomes
 # its own hive-partitioned sub-corpus (assessment=<label>) under
-# output/NXS_TCA_corpus/corpus/. TCA is a public group (no auth needed);
-# NXS is private and needs a Zotero API key with group access, stored in
-# the system keyring under the entry below.
+# input/corpus_chapter/ (frozen static input; see CLAUDE.md). TCA is a
+# public group (no auth needed); NXS is private and needs a Zotero API key
+# with group access, stored in the system keyring under the entry below.
 zotero:
   assessments:
     tca:
@@ -14,23 +14,6 @@ zotero:
       id: 4596166
       description: "IPBES NXS assessment literature Zotero group (private)"
   api_key_keyring: API_zotero_all_groups
-
-# Inline-citation extraction from the concept definitions. Two methods run as
-# parallel targets (both built by tar_make): a deterministic regex parser and
-# an LLM parser via OpenRouter. Both feed the same resolve_citations() step and
-# are compared in the Citation Method Comparison report. The regex chain feeds
-# the production `corpus` (cited works); switch `active` to "llm" to use the
-# LLM chain instead.
-citations:
-  active: regex           # which extraction feeds the production `corpus`: regex | llm
-  llm:
-    api_key_keyring: API_openrouter   # keyring::key_set("API_openrouter") — OpenRouter key
-    base_url: https://openrouter.ai/api/v1/chat/completions
-    model: anthropic/claude-sonnet-5
-    temperature: 0
-    max_retries: 3
-    timeout: 90            # per-request seconds; fail fast instead of stalling
-    workers: 6             # parallel API calls (furrr multisession); 1 = sequential
 
 embeddings:
   # Which entry under configs: is active for this pipeline run. The active

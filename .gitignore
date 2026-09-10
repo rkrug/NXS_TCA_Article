@@ -110,21 +110,5 @@ $RECYCLE.BIN/
 .venv/
 
 
-TCAC 2.0.code-workspace
-
-# output — bulk artefacts live here (often on an external drive, symlinked).
-# The `output` symlink itself is local-machine state, never committed.
-# EXCEPTION: output/reports/ (the rendered HTML reports) IS tracked so the
-# gh-pages publish workflow can deploy it.
-/output/*
-!/output/reports/
-!/output/reports/**
-output_local/
-
-# Fork: frozen corpus + embeddings live under input/ (bulk clones of the
-# upstream TCAC 2.0 artefacts). Never commit them.
-input/corpus/
-input/embeddings/
-
 
 ~$*

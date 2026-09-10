@@ -1,7 +1,7 @@
-# Static landing page linking to the two rendered reports. Deliberately plain
-# HTML/CSS (no Quarto render) -- it only needs to exist once both reports have
-# been copied into out_dir, and it reads their filenames directly rather than
-# duplicating the config-name logic that produced them.
+# Static landing page linking to the rendered report + TD docs. Deliberately
+# plain HTML/CSS (no Quarto render) -- it only needs to exist once everything
+# has been copied into out_dir, and it reads their filenames directly rather
+# than duplicating the config-name logic that produced them.
 .html_escape <- function(x) {
   x <- gsub("&", "&amp;", x, fixed = TRUE)
   x <- gsub("<", "&lt;", x, fixed = TRUE)
@@ -23,7 +23,6 @@ fix_td_cross_links <- function(html_path) {
 
 build_report_index <- function(
   report_analysis,
-  report_citation_comparison,
   td_vectorisation,
   td_runpod_setup,
   out_dir = "output/reports"
@@ -38,16 +37,6 @@ build_report_index <- function(
         "similarity (embeddings) and by shared citations, ending in the",
         "Approach × Action heatmap (semantic similarity, confirmed by",
         "citation overlap) that is the project's central figure."
-      )
-    ),
-    list(
-      href = basename(report_citation_comparison),
-      title = "Citation Identification Method Comparison",
-      desc = paste(
-        "Compares the two methods used to extract in-text citations from the",
-        "concept definitions -- a deterministic regex parser and an LLM",
-        "(OpenRouter) -- including where they agree, where they disagree,",
-        "and citations neither could resolve."
       )
     )
   )

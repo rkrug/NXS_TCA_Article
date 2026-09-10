@@ -58,14 +58,6 @@ save_ggplot_fig <- function(
   invisible(path_png)
 }
 
-save_widget_html <- function(w, name, dir = "output/figures") {
-  ensure_figures_dir(dir)
-  path <- file.path(dir, paste0(name, ".html"))
-  # selfcontained = TRUE embeds JS/CSS so the file works standalone in Finder.
-  htmlwidgets::saveWidget(w, path, selfcontained = TRUE)
-  invisible(path)
-}
-
 # output/figures/ is not tracked in git (see .gitignore), so a report that
 # links straight there would 404 once distributed. Called from the
 # report_* copy targets in _targets.R, once per report, after its render:

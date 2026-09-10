@@ -6,10 +6,16 @@ config:
     nodePlacementStrategy: BRANDES_KOEPF
 ---
 
-%% NXS TCS Article — end-to-end targets pipeline (flowchart).
-%% Keypapers = the TCA/Nexus concept definitions (4 worksheets). Their inline
-%% citations are extracted and resolved to a cited `corpus`; the former
-%% assessment corpus is now `corpus_chapter`. Topic modelling is disabled.
+%% NXS TCS Article — end-to-end targets pipeline (flowchart), current state.
+%% Keypapers = the TCA/Nexus concept definitions (2 worksheets: TCA
+%% Approaches, TCA Actions). corpus_chapter is now a FROZEN STATIC INPUT
+%% (originally extracted from input/snapshot/ via get_corpus_from_snapshot(),
+%% moved into input/ once stable) — no live snapshot dependency. Two citation
+%% extraction methods (regex, llm) both build every run; only
+%% citations.active feeds the production Stage 2 linkage. Full-corpus
+%% embeddings, score_keypapers(), Stage 3 (cited-literature embedding)
+%% linkage, TCA Action → Nexus Response Option, BERTopic and the Embedding /
+%% Corpus reports have all been removed.
 
 flowchart TD
 
@@ -19,124 +25,107 @@ flowchart TD
   subgraph kp_asm["Keypapers + citations (from the definitions .xlsx)"]
     direction TB
 
-    defs[/"TCA/Nexus definitions · 4 sheets<br/><tt>input/TCA and Nexus Definitions-1.xlsx</tt>"/]
-    prep["<tt>prepare_key_definitions()</tt><br/>unified schema, citations stripped"]
+    defs[/"TCA/Nexus definitions · 2 sheets<br/><tt>input/TCA and Nexus Definitions-1.xlsx</tt>"/]
+    prep["<tt>prepare_key_definitions()</tt>"]
     key_db[("<tt>key_works</tt><br/>keypaper/keyset=*")]
-    extract["<tt>extract_definition_citations()</tt><br/>regex (author, year)"]
-    cite_ex[("<tt>key_citations</tt><br/>citations/extracted")]
-    resolve["<tt>resolve_citations()</tt><br/>strict + loose, matching assessment"]
-    cite_rs[("<tt>citations_resolved</tt><br/>citations/resolved<br/>(unmatched kept)")]
+    extract_re["<tt>extract_definition_citations()</tt><br/>regex (author, year)"]
+    extract_llm["<tt>extract_definition_citations_llm()</tt><br/>OpenRouter LLM"]
+    cite_ex_re[("<tt>key_citations</tt><br/>citations_extracted/method=regex")]
+    cite_ex_llm[("<tt>key_citations_llm</tt><br/>citations_extracted/method=llm")]
+    resolve_re["<tt>resolve_citations()</tt> · regex"]
+    resolve_llm["<tt>resolve_citations()</tt> · llm"]
+    cite_rs_re[("<tt>citations_resolved</tt><br/>citations_resolved/method=regex")]
+    cite_rs_llm[("<tt>citations_resolved_llm</tt><br/>citations_resolved/method=llm")]
+    cite_active[("<tt>citations_resolved_active</tt><br/>= regex or llm, per config")]
 
     defs --> prep --> key_db
-    key_db --> extract --> cite_ex
-    cite_ex --> resolve --> cite_rs
+    key_db --> extract_re --> cite_ex_re
+    key_db --> extract_llm --> cite_ex_llm
+    cite_ex_re --> resolve_re --> cite_rs_re
+    cite_ex_llm --> resolve_llm --> cite_rs_llm
+    cite_rs_re -.->|"citations.active: regex"| cite_active
+    cite_rs_llm -.->|"citations.active: llm"| cite_active
   end
 
   %% ===================================================================
-  subgraph corpus_asm["Corpus assembly (Zotero → OpenAlex)"]
+  subgraph corpus_asm["Corpus assembly (Zotero → OpenAlex → frozen input)"]
     direction TB
 
     ztca(["Zotero TCA group<br/>(public, id 4589462)"])
     znxs(["Zotero NXS group<br/>(private, keyring)"])
     oa(["OpenAlex API"])
-    snap[("OpenAlex snapshot<br/><tt>input/snapshot/</tt> · RELEASE 2026-01-15")]
 
-    dl["<tt>download_zotero_assessment()</tt> · nxs & tca"]
-    ids["<tt>get_ids_from_dois()</tt> · nxs & tca"]
-    corp["<tt>get_corpus_from_snapshot()</tt><br/>(+ Zotero fallback)"]
-    build_cc["<tt>build_cited_corpus()</tt><br/>cited works = subset of corpus_chapter"]
+    dl["<tt>download_zotero_assessment()</tt> · tca & nxs"]
+    ids["<tt>get_ids_from_dois()</tt> · tca & nxs"]
 
     zdb[("zotero/assessment=*/chapter=*")]
     iddb[("ids/assessment=*")]
-    corpus_chapter[("<tt>corpus_chapter</tt><br/>corpus_chapter/assessment=*/chapter=*")]
-    corpus_db[("<tt>corpus</tt> (cited)<br/>corpus/")]
+    corpus_chapter[("<tt>corpus_chapter</tt> · FROZEN STATIC INPUT<br/><tt>input/corpus_chapter/assessment=*/chapter=*</tt>")]
 
     ztca --> dl
     znxs --> dl --> zdb
     zdb --> ids
     oa <--> ids
     ids --> iddb
-    iddb --> corp
-    snap --> corp
-    zdb --> corp
-    corp --> corpus_chapter
-    corpus_chapter --> build_cc
-    build_cc --> corpus_db
   end
 
-  cite_rs --> resolve
-  cite_rs --> build_cc
+  note_snap["Originally <tt>get_corpus_from_snapshot()</tt> read<br/><tt>input/snapshot/</tt> (OpenAlex snapshot); moved into<br/><tt>input/</tt> once stable — snapshot no longer a live dependency"]
+  note_snap -.-> corpus_chapter
+
+  zdb --> resolve_re
+  zdb --> resolve_llm
+  iddb --> resolve_re
+  iddb --> resolve_llm
+  corpus_chapter --> resolve_re
+  corpus_chapter --> resolve_llm
 
   %% ===================================================================
-  subgraph emb_stage["Embeddings (SPECTER2 via RunPod TEI) — 3 sources"]
+  subgraph emb_stage["Embeddings (BGE via RunPod TEI) — keypapers only"]
     direction TB
 
-    tei(["RunPod TEI<br/>(SPECTER2)"])
-    embed["<tt>embed_works()</tt><br/>corpus_chapter × variant × chapter + keypaper × keyset"]
-    derive["<tt>derive_source_embeddings()</tt><br/>filter corpus_chapter → cited (no re-embed)"]
+    tei(["RunPod TEI<br/>(BAAI/bge-large-en-v1.5)"])
+    embed["<tt>embed_works()</tt><br/>keypaper × variant=title_abstract"]
+    emb_kp[("embeddings/config=bge_large_runpod/<br/>source=keypaper/variant=title_abstract")]
 
-    emb_cc[("embeddings/…/source=corpus_chapter")]
-    emb_kp[("embeddings/…/source=keypaper/variant=*/keyset=*")]
-    emb_cited[("embeddings/…/source=corpus")]
-
-    corpus_chapter --> embed
     key_db --> embed
     tei <--> embed
-    embed --> emb_cc
     embed --> emb_kp
-    emb_cc --> derive
-    corpus_db --> derive
-    derive --> emb_cited
   end
 
   %% ===================================================================
-  subgraph score_stage["Keypaper similarity (chapter ↔ keypaper)"]
-    direction TB
-
-    score["<tt>score_keypapers()</tt> · per variant"]
-    score_comb["<tt>score_keypapers_combined()</tt><br/>title_abstract + title fallback"]
-    scores_db[("scores/config=*/variant=*")]
-    scores_comb_db[("scores_combined[_ta_ref]/<br/>config=*/assessment=*/chapter=*")]
-
-    emb_cc --> score --> scores_db
-    emb_kp --> score
-    emb_cc --> score_comb --> scores_comb_db
-    emb_kp --> score_comb
-  end
-
-  %% ===================================================================
-  subgraph link_stage["Keyset linkage (keypaper ↔ keypaper, 3 stages)"]
+  subgraph link_stage["Keyset linkage (TCA Approaches ↔ TCA Actions, 2 stages)"]
     direction TB
 
     l1["Stage 1 · <tt>build_link_stage1_data()</tt><br/>definition-embedding cosine"]
     l2["Stage 2 · <tt>build_link_stage2_data()</tt><br/>cited-literature overlap (Jaccard)"]
-    l3["Stage 3 · <tt>build_link_stage3_data()</tt><br/>cited-literature embedding (mean pairwise)"]
-    sankey["3 Sankeys + keyset×keyset matrices<br/>(TCA Action → Nexus Response Option)"]
+    sankey["Sankeys + keyset×keyset matrices<br/>+ Approach×Action heatmaps<br/>(stage1 / stage2 / combined)"]
 
     emb_kp --> l1 --> sankey
-    cite_rs --> l2 --> sankey
-    cite_rs --> l3
-    emb_cited --> l3 --> sankey
+    cite_active --> l2 --> sankey
   end
 
   %% ===================================================================
   subgraph report_stage["Visualisation + reports (output/reports/)"]
     direction TB
 
-    viz["viz_* / tbl_* targets"]
-    r_emb["Embedding Report (QC + citation coverage)"]
-    r_ana["Chapter Analysis Report<br/>(chapter ↔ keypaper + keyset linkage)"]
-    r_idx["Index — NXS TCS Article Report"]
+    viz["viz_* targets<br/>(keypaper self-sim, sankeys, matrices, heatmaps)"]
+    cmp["Citation comparison viz<br/>(regex vs llm summary / overlap / review)"]
+    r_ana["Chapter Analysis Report<br/>ends in combined Approach×Action heatmap"]
+    r_cmp["Citation Method Comparison Report"]
+    r_td1["TD_Vectorisation"]
+    r_td2["TD_RunPodSetup"]
+    r_idx["Index — landing page"]
 
-    scores_db --> viz
-    scores_comb_db --> viz
-    corpus_chapter --> viz
     key_db --> viz
     sankey --> viz
-    viz --> r_emb
+    cite_rs_re --> cmp
+    cite_rs_llm --> cmp
     viz --> r_ana
-    r_emb --> r_idx
+    cmp --> r_cmp
     r_ana --> r_idx
+    r_cmp --> r_idx
+    r_td1 --> r_idx
+    r_td2 --> r_idx
   end
 
   config --> kp_asm
@@ -149,9 +138,11 @@ flowchart TD
   classDef db fill:#fff3b0,stroke:#b45309,color:#111827;
   classDef proc fill:#bbf7d0,stroke:#16a34a,color:#14532d;
   classDef svc fill:#e0f2fe,stroke:#0284c7,color:#0f172a;
+  classDef note fill:#f3f4f6,stroke:#9ca3af,color:#374151,stroke-dasharray: 4 3;
 
   class config config;
   class defs input;
-  class ztca,znxs,oa,snap,tei svc;
-  class key_db,cite_ex,cite_rs,zdb,iddb,corpus_chapter,corpus_db,emb_cc,emb_kp,emb_cited,scores_db,scores_comb_db db;
-  class prep,extract,resolve,dl,ids,corp,build_cc,embed,derive,score,score_comb,l1,l2,l3,sankey,viz,r_emb,r_ana,r_idx proc;
+  class ztca,znxs,oa,tei svc;
+  class key_db,cite_ex_re,cite_ex_llm,cite_rs_re,cite_rs_llm,cite_active,zdb,iddb,corpus_chapter,emb_kp db;
+  class prep,extract_re,extract_llm,resolve_re,resolve_llm,dl,ids,embed,l1,l2,sankey,viz,cmp,r_ana,r_cmp,r_td1,r_td2,r_idx proc;
+  class note_snap note;

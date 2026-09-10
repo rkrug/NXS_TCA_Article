@@ -52,11 +52,6 @@ emb_cfg <- emb_cfg_full[setdiff(names(emb_cfg_full), emb_volatile)]
 zotero_tca_id <- cfg$zotero$assessments$tca$id
 zotero_nxs_id <- cfg$zotero$assessments$nxs$id
 zotero_keyring <- cfg$zotero$api_key_keyring
-# Citation extraction: which method feeds the production `corpus` (regex | llm),
-# and the OpenRouter LLM config for the alternative extractor. Hoisted so the
-# LLM connection details don't drag the whole cfg into target hashes.
-citations_active <- cfg$citations$active %||% "regex"
-citations_llm_cfg <- cfg$citations$llm
 # emb_name (above) is baked into the rendered report filenames. tar_quarto's
 # output_file is evaluated eagerly at pipeline-construction time, so it must be
 # a plain script variable (not a target).
@@ -142,48 +137,18 @@ list(
     format = "file"
   ),
 
-  # Extract full records from the local OpenAlex snapshot, hive-partitioned
-  # by assessment (assessment=tca / assessment=nxs) under one corpus root ----
-
-  tar_target(
-    corpus_chapter_tca,
-    get_corpus_from_snapshot(
-      ids_db = ids_tca,
-      snapshot_dir = "input/snapshot",
-      project_folder = "output/NXS_TCA_corpus/_scratch/tca",
-      workers = workers,
-      zotero_path = zotero_tca,
-      dest_dir = "output/NXS_TCA_corpus/corpus_chapter/assessment=tca"
-    ),
-    format = "file"
-  ),
-  tar_target(
-    corpus_chapter_nxs,
-    get_corpus_from_snapshot(
-      ids_db = ids_nxs,
-      snapshot_dir = "input/snapshot",
-      project_folder = "output/NXS_TCA_corpus/_scratch/nxs",
-      workers = workers,
-      zotero_path = zotero_nxs,
-      dest_dir = "output/NXS_TCA_corpus/corpus_chapter/assessment=nxs"
-    ),
-    format = "file"
-  ),
-
-  # Combined corpus_chapter dataset — the full assessment reference libraries
-  # (both assessment branches must exist before the shared hive root is
-  # considered ready). This is the former `corpus`; renamed to `corpus_chapter`
-  # now that the new `corpus` target holds the works CITED in the definitions.
-  # Downstream chapter<->keypaper analysis reads this root (assessment=tca /
-  # assessment=nxs partitions).
+  # Combined corpus_chapter dataset — the full assessment reference libraries,
+  # hive-partitioned by assessment (assessment=tca / assessment=nxs). Frozen
+  # static input (fork-style clone, like input/corpus/ and input/embeddings/):
+  # originally extracted from the local OpenAlex snapshot via
+  # get_corpus_from_snapshot() (see git history for corpus_chapter_tca /
+  # corpus_chapter_nxs), then moved into input/ once stable so input/snapshot
+  # is no longer a live pipeline dependency. Downstream chapter<->keypaper
+  # analysis reads this root (assessment=tca / assessment=nxs partitions).
 
   tar_target(
     corpus_chapter,
-    {
-      force(corpus_chapter_tca)
-      force(corpus_chapter_nxs)
-      dirname(corpus_chapter_tca)
-    },
+    "input/corpus_chapter",
     format = "file"
   ),
 
@@ -194,17 +159,11 @@ list(
   # Stage-2 citation-overlap linkage. See R/extract_definition_citations.R /
   # resolve_citations.R.
 
-  # Two extraction methods, both built every run: `regex` (deterministic) and
-  # `llm` (OpenRouter). Both feed the same resolve_citations() and are compared
-  # in the Citation Method Comparison report.
+  # Regex-only extraction (deterministic). The LLM extractor + citation
+  # method-comparison report were retired — see git history.
   tar_target(
     key_citations,
     extract_definition_citations(key_works),
-    format = "file"
-  ),
-  tar_target(
-    key_citations_llm,
-    extract_definition_citations_llm(key_works, citations_llm_cfg),
     format = "file"
   ),
   tar_target(
@@ -218,35 +177,7 @@ list(
     ),
     format = "file"
   ),
-  tar_target(
-    citations_resolved_llm,
-    resolve_citations(
-      citations_extracted_dir = key_citations_llm,
-      zotero_root = dirname(zotero_tca),
-      ids_root = dirname(ids_tca),
-      corpus_chapter_dir = corpus_chapter,
-      out_dir = "output/NXS_TCA_corpus/citations_resolved/method=llm"
-    ),
-    format = "file"
-  ),
-  # The resolved citations that feed the production corpus + linkage, selected
-  # by citations.active in config.yaml (regex | llm). Resolved HERE, at
-  # pipeline-construction time, rather than inside the target's own command --
-  # `targets` detects a target's dependencies by static analysis of its
-  # command, so branching inside tar_target() would make BOTH
-  # key_citations_llm/citations_resolved_llm and their regex counterparts
-  # unconditional dependencies (forcing live OpenRouter calls any time
-  # anything downstream, like link_stage2, needs to rebuild -- even with
-  # citations.active: regex). Branching here instead means only the ACTIVE
-  # method's upstream is a real dependency of citations_resolved_active; the
-  # inactive method's targets still get built separately, but only when
-  # something that actually needs them (report_citation_comparison) requires
-  # it.
-  if (identical(citations_active, "llm")) {
-    tar_target(citations_resolved_active, citations_resolved_llm, format = "file")
-  } else {
-    tar_target(citations_resolved_active, citations_resolved, format = "file")
-  },
+  tar_target(citations_resolved_active, citations_resolved, format = "file"),
   tar_target(
     emb_keypapers_title_abstract,
     embed_works(
@@ -378,27 +309,6 @@ list(
     format = qs2_format()
   ),
 
-  # ---- Citation method comparison (regex vs LLM) --------------------------
-  tar_target(
-    viz_citation_summary_tbl,
-    citation_comparison_summary(citations_resolved, citations_resolved_llm),
-    format = qs2_format()
-  ),
-  tar_target(
-    viz_citation_overlap_data,
-    citation_comparison_overlap(citations_resolved, citations_resolved_llm),
-    format = qs2_format()
-  ),
-  tar_target(
-    viz_citation_overlap_fig,
-    build_citation_overlap_fig(viz_citation_overlap_data),
-    format = qs2_format()
-  ),
-  tar_target(
-    viz_citation_review,
-    citation_comparison_review(citations_resolved, citations_resolved_llm),
-    format = qs2_format()
-  ),
   # Render the Chapter Analysis Report (chapter <-> keypaper similarity).
   tarchetypes::tar_quarto(
     render_report_analysis,
@@ -411,17 +321,6 @@ list(
     quiet = TRUE
   ),
 
-  # Render the Citation Method Comparison Report (regex vs LLM extraction).
-  tarchetypes::tar_quarto(
-    render_report_citation_comparison,
-    path = "NXS TCS Article Citation Method Comparison Report.qmd",
-    output_file = paste0(
-      "NXS TCS Article Citation Method Comparison Report - ",
-      emb_name,
-      ".html"
-    ),
-    quiet = TRUE
-  ),
   tar_target(
     report_analysis,
     {
@@ -456,32 +355,6 @@ list(
     },
     format = "file"
   ),
-  tar_target(
-    report_citation_comparison,
-    {
-      src <- render_report_citation_comparison[grepl(
-        "\\.html$",
-        render_report_citation_comparison
-      )]
-      if (length(src) != 1) {
-        stop(
-          "Expected exactly one rendered .html among ",
-          "render_report_citation_comparison's tracked files, got: ",
-          paste(render_report_citation_comparison, collapse = ", ")
-        )
-      }
-      dest_dir <- "output/reports"
-      dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
-      dest <- file.path(dest_dir, basename(src))
-      if (!file.copy(src, dest, overwrite = TRUE)) {
-        stop("Could not copy ", src, " to ", dest)
-      }
-      copy_report_figures("citation_method_overlap")
-      dest
-    },
-    format = "file"
-  ),
-
   # Render the two standalone TD (technical design) docs alongside the
   # reports. Plain .md, no executable chunks -- rendered for the read-only
   # HTML copy; the .md remains the source of truth read on GitHub.
@@ -542,7 +415,7 @@ list(
     format = "file"
   ),
 
-  # Landing page linking to the two reports and two TD docs above. Depends
+  # Landing page linking to the report and two TD docs above. Depends
   # on the copy targets (not the render_* ones) so it always points at the
   # files that actually landed in output/reports/, and only builds once
   # they have.
@@ -550,7 +423,6 @@ list(
     report_index,
     build_report_index(
       report_analysis,
-      report_citation_comparison,
       td_vectorisation,
       td_runpod_setup,
       out_dir = "output/reports"

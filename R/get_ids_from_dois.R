@@ -1,6 +1,6 @@
-# Resolves OpenAlex ids for a Zotero-derived set of DOIs via the live API,
-# so get_corpus_from_snapshot() can then pull full records from the local
-# snapshot.
+# Resolves OpenAlex ids for a Zotero-derived set of DOIs via the live API.
+# These fed get_corpus_from_snapshot() (since retired -- corpus_chapter is
+# now a frozen static input, see CLAUDE.md) and still feed resolve_citations().
 #
 # The Zotero dataset is hive-partitioned by chapter (assessment=<label>/
 # chapter=<c>/…). We iterate those chapter partitions and resolve each

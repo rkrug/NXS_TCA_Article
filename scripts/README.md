@@ -1,6 +1,21 @@
-# TCAC 2.0 — TEI / SPECTER2 lifecycle scripts
+# TCAC 2.0 — TEI / SPECTER2 lifecycle scripts (legacy)
 
-This folder contains the operational scripts for the SPECTER2 embedding pipeline.
+> **Scope note.** This describes the original TCAC 2.0 local-TEI +
+> full-corpus-SPECTER2 + BERTopic workflow. None of it is the current
+> procedure: the live pipeline hosts TEI on RunPod (BGE by default,
+> SPECTER2 as an alternative) via the `external/runpod` submodule — see
+> [TD_RunPodSetup.md](../TD_RunPodSetup.md) — and BERTopic has been removed
+> entirely (see `CLAUDE.md` Standing TODOs). The scripts below are left in
+> place, unreferenced by `_targets.R`, in case any of this local/BERTopic
+> workflow is needed again. Two scripts under `scripts/runpod/` remain in
+> active (manual) use: `start_tei_runpod.sh` (start TEI by hand inside an
+> already-running pod) and `sync_embeddings_to_r2.sh` (mirror embeddings to
+> Cloudflare R2 — kept only as a utility now that BERTopic no longer needs
+> it). `consolidate_leaf.R` and `split_embeddings.R` are also unreferenced,
+> one-off recovery/utility scripts from the old full-corpus embedding run.
+
+This folder contains the operational scripts for the (retired) SPECTER2
+embedding + BERTopic pipeline.
 
 ## One-time setup (per machine)
 
