@@ -23,41 +23,6 @@ ul.task-list li input[type="checkbox"] {
 width: 0.8em;
 margin: 0 0.8em 0.2em -1em;  vertical-align: middle;
 }
-
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-{ counter-reset: source-line 0; }
-pre.numberSource code > span
-{ position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-{ content: counter(source-line);
-position: relative; left: -1em; text-align: right; vertical-align: baseline;
-border: none; display: inline-block;
--webkit-touch-callout: none; -webkit-user-select: none;
--khtml-user-select: none; -moz-user-select: none;
--ms-user-select: none; user-select: none;
-padding: 0 4px; width: 4em;
-}
-pre.numberSource { margin-left: 3em; padding-left: 4px; }
-div.sourceCode
-{ }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
-}
 </style>
 
 
@@ -2212,20 +2177,8 @@ vertical-align: -.125em;
   <ul>
   <li><a href="#context" id="toc-context" class="nav-link active" data-scroll-target="#context">Context</a></li>
   <li><a href="#embedding-model" id="toc-embedding-model" class="nav-link" data-scroll-target="#embedding-model">Embedding model</a></li>
-  <li><a href="#embedding-sets-three-planned-three-planned" id="toc-embedding-sets-three-planned-three-planned" class="nav-link" data-scroll-target="#embedding-sets-three-planned-three-planned">Embedding Sets — Three Planned — Three Planned</a>
-  <ul class="collapse">
-  <li><a href="#rationale-for-three-sets" id="toc-rationale-for-three-sets" class="nav-link" data-scroll-target="#rationale-for-three-sets">Rationale for three sets</a></li>
-  <li><a href="#storage-estimate-float16" id="toc-storage-estimate-float16" class="nav-link" data-scroll-target="#storage-estimate-float16">Storage estimate (float16)</a></li>
-  </ul></li>
   <li><a href="#input-preparation-r" id="toc-input-preparation-r" class="nav-link" data-scroll-target="#input-preparation-r">Input Preparation (R)</a></li>
-  <li><a href="#tei-server-setup" id="toc-tei-server-setup" class="nav-link" data-scroll-target="#tei-server-setup">TEI Server Setup</a>
-  <ul class="collapse">
-  <li><a href="#scripts-in-instscripts" id="toc-scripts-in-instscripts" class="nav-link" data-scroll-target="#scripts-in-instscripts">Scripts in <code>inst/scripts/</code></a></li>
-  <li><a href="#tei-installation-macos-apple-silicon" id="toc-tei-installation-macos-apple-silicon" class="nav-link" data-scroll-target="#tei-installation-macos-apple-silicon">TEI installation (macOS Apple Silicon)</a></li>
-  <li><a href="#verify-server" id="toc-verify-server" class="nav-link" data-scroll-target="#verify-server">Verify server</a></li>
-  </ul></li>
-  <li><a href="#hardware" id="toc-hardware" class="nav-link" data-scroll-target="#hardware">Hardware</a></li>
-  <li><a href="#next-steps-for-claude-code" id="toc-next-steps-for-claude-code" class="nav-link" data-scroll-target="#next-steps-for-claude-code">Next Steps for Claude Code</a></li>
+  <li><a href="#tei-server-setup" id="toc-tei-server-setup" class="nav-link" data-scroll-target="#tei-server-setup">TEI Server Setup</a></li>
   </ul>
 </nav>
 </div>
@@ -2305,187 +2258,17 @@ vertical-align: -.125em;
 </table>
 <p>The separator matters: SPECTER2 was trained with an explicit <code>[SEP]</code> between title and abstract, whereas BGE is a single-text model with no such convention, so its <code>sep_token</code> is empty and the two fields are concatenated directly. <code>title_cap_combined: 200</code> caps the title in the combined variant for both.</p>
 <p>SPECTER2 remains domain-appropriate (trained on the scientific citation graph); BGE is the current default. Switching is a one-line <code>active:</code> change plus a host — outputs land in separate <code>config=</code> partitions.</p>
+<p><code>variant_preprocessor()</code> (<code>R/embed_works.R</code>) also supports <code>title</code>-only and <code>abstract</code>-only variants, but only <code>title_abstract</code> is currently wired up as an actual <code>_targets.R</code> target (<code>emb_keypapers_title_abstract</code>) — the other two are unused code paths, not active embedding sets.</p>
 <hr>
-</section>
-<section id="embedding-sets-three-planned-three-planned" class="level2">
-<h2 class="anchored" data-anchor-id="embedding-sets-three-planned-three-planned">Embedding Sets — Three Planned — Three Planned</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Set</th>
-<th>Input</th>
-<th>Coverage</th>
-<th>Notes</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>emb_title</code></td>
-<td><code>title</code> (cap ~500 chars)</td>
-<td>100%</td>
-<td>Fallback for all records</td>
-</tr>
-<tr class="even">
-<td><code>emb_title_abstract</code></td>
-<td><code>title [SEP] abstract</code> (cap ~2300 chars)</td>
-<td>~80%</td>
-<td>Primary semantic embedding</td>
-</tr>
-<tr class="odd">
-<td><code>emb_abstract</code></td>
-<td><code>abstract</code> (cap ~2300 chars)</td>
-<td>~80%</td>
-<td>Disentangles title vs abstract signal</td>
-</tr>
-</tbody>
-</table>
-<section id="rationale-for-three-sets" class="level3">
-<h3 class="anchored" data-anchor-id="rationale-for-three-sets">Rationale for three sets</h3>
-<ul>
-<li><code>emb_title</code> covers records without abstracts and enables title-only similarity</li>
-<li><code>emb_title_abstract</code> is the primary embedding, aligned with SPECTER2 training format</li>
-<li><code>emb_abstract</code> enables analysis of how much titles reflect abstract content</li>
-<li>Derived metrics possible: <code>sim(emb_title, emb_abstract)</code> as title informativeness proxy</li>
-</ul>
-</section>
-<section id="storage-estimate-float16" class="level3">
-<h3 class="anchored" data-anchor-id="storage-estimate-float16">Storage estimate (float16)</h3>
-<ul>
-<li>5M × 768 × 2 bytes ≈ <strong>7.5 GB per set</strong> → <strong>~22.5 GB total</strong></li>
-</ul>
-<hr>
-</section>
 </section>
 <section id="input-preparation-r" class="level2">
 <h2 class="anchored" data-anchor-id="input-preparation-r">Input Preparation (R)</h2>
-<p>TEI handles truncation automatically — no preprocessing needed beyond:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># title+abstract input</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">paste</span>(title, abstract, <span class="at">sep =</span> tokenizer_sep_token)  <span class="co"># &quot;[SEP]&quot; for SPECTER2</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co"># title only</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>title  <span class="co"># raw, TEI truncates at 512 tokens</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="co"># abstract only  </span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>abstract  <span class="co"># raw, TEI truncates at 512 tokens</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Character caps before sending (defensive, avoids sending huge payloads): - Title: 500 chars - Abstract: 2300 chars (~512 tokens × 4.5 chars/token)</p>
+<p>TEI handles truncation automatically — no preprocessing needed beyond joining title + abstract per the active config’s <code>sep_token</code> (<code>&quot;&quot;</code> for BGE, <code>&quot;[SEP]&quot;</code> for SPECTER2) and <code>title_cap_combined</code> (<code>preprocessor_title_abstract()</code>, <code>R/embed_works.R</code>).</p>
 <hr>
 </section>
 <section id="tei-server-setup" class="level2">
 <h2 class="anchored" data-anchor-id="tei-server-setup">TEI Server Setup</h2>
-<section id="scripts-in-instscripts" class="level3">
-<h3 class="anchored" data-anchor-id="scripts-in-instscripts">Scripts in <code>inst/scripts/</code></h3>
-<p><strong><code>prepare_specter2_merged.py</code></strong> — one-time setup per machine: - Loads <code>allenai/specter2_base</code> + <code>allenai/specter2</code> proximity adapter - Merges adapter weights into base model (makes it TEI-compatible) - Saves merged model to per-user cache: - macOS: <code>~/Library/Caches/org.R-project.R/R/openalexVectorComp/specter2_proximity_merged</code> - Linux: <code>~/.cache/R/openalexVectorComp/specter2_proximity_merged</code> - Override with <code>OVC_SPECTER2_PATH</code> env var</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install transformers adapters torch</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> prepare_specter2_merged.py</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong><code>start_tei_specter2.sh</code></strong> — starts TEI server:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Environment overrides:</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">#   OVC_SPECTER2_PATH          Path to merged model dir</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">#   OVC_TEI_PORT               Port (default: 8080)</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="co">#   OVC_TEI_MAX_BATCH_TOKENS   Max tokens per batch (default: 32768)</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">#   OVC_TEI_MAX_CONCURRENT     Max concurrent requests (default: 512)</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="bu">exec</span> text-embeddings-router <span class="dt">\</span></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">--model-id</span> <span class="st">&quot;</span><span class="va">${MODEL_PATH}</span><span class="st">&quot;</span> <span class="dt">\</span></span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  <span class="at">--port</span> <span class="st">&quot;</span><span class="va">${PORT}</span><span class="st">&quot;</span> <span class="dt">\</span></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  <span class="at">--max-batch-tokens</span> <span class="st">&quot;</span><span class="va">${MAX_BATCH_TOKENS}</span><span class="st">&quot;</span> <span class="dt">\</span></span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  <span class="at">--max-concurrent-requests</span> <span class="st">&quot;</span><span class="va">${MAX_CONCURRENT}</span><span class="st">&quot;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="tei-installation-macos-apple-silicon" class="level3">
-<h3 class="anchored" data-anchor-id="tei-installation-macos-apple-silicon">TEI installation (macOS Apple Silicon)</h3>
-<p>Use Homebrew — it builds with Metal support (<code>-F metal</code>) automatically:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">brew</span> install text-embeddings-inference</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Do <strong>not</strong> use <code>cargo install</code> — the crates.io version lacks Metal support.</p>
-<p>After installing via Homebrew:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> uninstall text-embeddings-router  <span class="co"># remove old cargo version</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">which</span> text-embeddings-router            <span class="co"># verify: /opt/homebrew/bin/...</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="verify-server" class="level3">
-<h3 class="anchored" data-anchor-id="verify-server">Verify server</h3>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> http://localhost:8080/health</span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> http://localhost:8080/embed <span class="dt">\</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">-X</span> POST <span class="dt">\</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">-H</span> <span class="st">&quot;Content-Type: application/json&quot;</span> <span class="dt">\</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">-d</span> <span class="st">&#39;{&quot;inputs&quot;: &quot;Test title [SEP] Test abstract&quot;}&#39;</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Returns 768-dimensional JSON array</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<hr>
-</section>
-</section>
-<section id="hardware" class="level2">
-<h2 class="anchored" data-anchor-id="hardware">Hardware</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Machine</th>
-<th>Backend</th>
-<th>Est. throughput</th>
-<th>Est. time for 15M embeddings</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>MacBook Pro M4 Max 36GB</td>
-<td>Metal (MPS) via TEI</td>
-<td>~1,500–2,000 docs/sec</td>
-<td>~2–3 hrs</td>
-</tr>
-<tr class="even">
-<td>GPU compute instance (CUDA)</td>
-<td>CUDA via TEI</td>
-<td>~5,000–8,000 docs/sec</td>
-<td>~30–45 min</td>
-</tr>
-</tbody>
-</table>
-<ul>
-<li>MacBook suitable for development and small-batch testing</li>
-<li>GPU compute instance for full production run</li>
-<li>TEI serves identically on both — same API, same client code</li>
-</ul>
-<hr>
-</section>
-<section id="next-steps-for-claude-code" class="level2">
-<h2 class="anchored" data-anchor-id="next-steps-for-claude-code">Next Steps for Claude Code</h2>
-<ol type="1">
-<li><strong>R client for TEI</strong> — implement <code>httr2</code>-based function in <code>openalexVectorComp</code> to:
-<ul>
-<li>Accept a character vector of texts</li>
-<li>POST to <code>http://localhost:{OVC_TEI_PORT}/embed</code></li>
-<li>Return a numeric matrix (n × 768)</li>
-</ul></li>
-<li><strong>Batch embedding pipeline</strong> — function to:
-<ul>
-<li>Read from Arrow/Parquet corpus</li>
-<li>Prepare the three input text variants</li>
-<li>Send in batches to TEI</li>
-<li>Write embeddings + OpenAlex ID back to Parquet</li>
-<li>Checkpoint every N records</li>
-</ul></li>
-<li><strong><code>adhoc_query</code> adapter</strong> — a second merged model for query-time embedding:
-<ul>
-<li>Run <code>prepare_specter2_merged.py</code> with adapter <code>adhoc_query</code></li>
-<li>Separate server or switchable model path</li>
-</ul></li>
-<li><strong>Similarity metrics</strong> — once all three embedding sets exist:
-<ul>
-<li><code>sim(emb_title, emb_abstract)</code> — title informativeness</li>
-<li><code>sim(emb_title, emb_title_abstract)</code> — abstract contribution</li>
-<li><code>sim(emb_title_abstract, emb_abstract)</code> — title shift</li>
-</ul></li>
-</ol>
+<p>See <a href="TD_RunPodSetup.html">TD_RunPodSetup.md</a> — the current setup is a RunPod- hosted TEI image (model baked in), not a local server. The old local Homebrew/<code>cargo</code>, SPECTER2-merge-script walkthrough that used to live here is retired; see git history if it’s ever needed again for local development.</p>
 </section>
 
 </main>
