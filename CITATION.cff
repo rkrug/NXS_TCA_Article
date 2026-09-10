@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+title: "IPBES TCA-Nexus approaches-actions linking pipeline"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+abstract: >-
+  R targets pipeline behind the approaches x actions analysis of the IPBES
+  Transformative Change / Nexus article: an OpenAlex corpus built over the two
+  IPBES Zotero groups, regex-based extraction of definition citations, and 
+  BAAI/bge-large-en-v1.5 embeddings, producing the approaches x actions heat map.
+authors:
+  - family-names: Krug
+    given-names: "Rainer M."
+    affiliation: "SIB Swiss Institute of Bioinformatics, Lausanne, Switzerland"
+    orcid: "https://orcid.org/0000-0002-7490-0066"
+license: MIT
+doi: "10.5281/zenodo.22687426"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22687426"
+    description: "Concept DOI: all versions"
+  - type: doi
+    value: "10.5281/zenodo.22687427"
+    description: "Version DOI: v1.0.0"
+repository-code: "https://github.com/rkrug/IPBES-TCA-Nexus-Linker-pipeline"
+version: 1.0.0
+date-released: "2026-09-10"
+references:
+  # The other half of the material behind the same article.
+  - type: software
+    title: "TCA-Nexus Linker"
+    authors:
+      - family-names: Loeffler
+        given-names: Benjamin
+        affiliation: "The Anthropocene Laboratory, Royal Swedish Academy of Sciences"
+    doi: "10.5281/zenodo.22686359"
+    repository-code: "https://github.com/Anthropocene-Laboratory/IPBES-TCA-Nexus-Linker"
+  - type: data
+    title: "Expert-coded linkages between the IPBES transformative-change actions and the IPBES Nexus response options"
+    authors:
+      - family-names: Loeffler
+        given-names: Benjamin
+    doi: "10.5281/zenodo.22686363"
+keywords:
+  - IPBES
+  - transformative change
+  - nexus assessment
+  - bibliometrics

@@ -1,0 +1,33 @@
+{
+  "upload_type": "software",
+  "title": "IPBES TCA-Nexus approaches-actions linking pipeline",
+  "description": "R targets pipeline behind the approaches x actions analysis of the IPBES Transformative Change / Nexus article: an OpenAlex corpus over the two IPBES Zotero groups, regex extraction of definition citations, and BAAI/bge-large-en-v1.5 embeddings, producing the approaches x actions heat map.",
+  "license": "mit",
+  "creators": [
+    {
+      "name": "Krug, Rainer M.",
+      "affiliation": "SIB Swiss Institute of Bioinformatics, Lausanne, Switzerland",
+      "orcid": "0000-0002-7490-0066"
+    }
+  ],
+  "keywords": [
+    "IPBES",
+    "transformative change",
+    "nexus assessment",
+    "bibliometrics"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.22686359",
+      "relation": "references",
+      "resource_type": "software",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "10.5281/zenodo.22686363",
+      "relation": "references",
+      "resource_type": "dataset",
+      "scheme": "doi"
+    }
+  ]
+}
